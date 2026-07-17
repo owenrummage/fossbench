@@ -89,9 +89,13 @@ jobs:
         if: startsWith(matrix.target, 'linux-')
         run: |
           OPENSSL_LIBDIR="$(find "$GITHUB_WORKSPACE/openssl-static" -type f -name libssl.a -exec dirname {} \;)"
+          EXTRA_STATIC_LIBS='-ldl'
+          if [ "${{ matrix.target }}" = linux-ppc32be ]; then
+            EXTRA_STATIC_LIBS="$EXTRA_STATIC_LIBS -latomic"
+          fi
           make "${{ matrix.target }}" \
             TLS_CFLAGS="-I$GITHUB_WORKSPACE/openssl-static/include" \
-            TLS_LDLIBS="$OPENSSL_LIBDIR/libssl.a $OPENSSL_LIBDIR/libcrypto.a -ldl" \
+            TLS_LDLIBS="$OPENSSL_LIBDIR/libssl.a $OPENSSL_LIBDIR/libcrypto.a $EXTRA_STATIC_LIBS" \
             LDFLAGS=-static
           file "dist/fossmark-${{ matrix.target }}"
           if ldd "dist/fossmark-${{ matrix.target }}" 2>&1 | grep -q '=>'; then
