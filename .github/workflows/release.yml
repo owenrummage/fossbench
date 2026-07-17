@@ -42,10 +42,6 @@ jobs:
             os: ubuntu-24.04
             openssl_target: linux-ppc
             cross_prefix: powerpc-linux-gnu-
-          - target: linux-ppc64be
-            os: ubuntu-24.04
-            openssl_target: linux-ppc64
-            cross_prefix: powerpc64-linux-gnu-
           - target: macos-amd64
             os: macos-14
             openssl_target: darwin64-x86_64-cc
@@ -70,12 +66,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes gcc-powerpc-linux-gnu
-
-      - name: Install the Linux PPC64 big-endian cross-compiler
-        if: matrix.target == 'linux-ppc64be'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes gcc-powerpc64-linux-gnu
 
       - name: Build static OpenSSL
         env:

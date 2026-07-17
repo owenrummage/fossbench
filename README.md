@@ -99,6 +99,11 @@ The PPC64 target is big-endian and is compiled for the PowerPC 970 with
 AltiVec, matching the CPU used by the iMac G5. It targets 64-bit Linux; use a
 PowerPC64 Linux installation or live environment on the machine to run it.
 
+PPC64 is source-build support only. The commonly available PPC64 cross-build
+libc requires POWER6 instructions and produces release binaries that fault on
+the iMac G5's PowerPC 970. Build `linux-ppc64be` natively on the G5 so it uses
+the compatible Arch POWER ELFv2 runtime.
+
 Release binaries statically include OpenSSL. Linux releases are fully static;
 macOS releases retain only Apple's required system-library linkage because the
 macOS toolchain does not support fully static executables.
@@ -107,8 +112,8 @@ macOS toolchain does not support fully static executables.
 
 Pushing a Git tag runs the GitHub Actions build and correctness tests. If they
 succeed, the workflow creates a GitHub Release named `Release <tag name>` with
-Linux archives for AMD64, ARM64, PPC32 big-endian, and PPC64 big-endian; macOS archives for AMD64
-and ARM64, and a `SHA256SUMS` file.
+Linux archives for AMD64, ARM64, and PPC32 big-endian; macOS archives for AMD64
+and ARM64; and a `SHA256SUMS` file. PPC64 remains available as a source build.
 
 ## Scores
 
