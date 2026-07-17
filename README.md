@@ -5,9 +5,10 @@ small C driver. It measures each workload twice: once on a single core and once
 across every available core. The final report includes separate single-core and
 multicore scores.
 
-The repository currently builds an executable named `fossmark` for ARM64 and
-x86-64. The C driver handles timing, memory, threads, output, and scoring. The
-performance-sensitive kernels live in architecture-specific assembly files.
+The repository currently builds an executable named `fossmark` for ARM64,
+x86-64, and 32-bit big-endian PowerPC. The C driver handles timing, memory,
+threads, output, and scoring. Performance-sensitive kernels live in
+architecture-specific backend files.
 
 ## Workloads
 
@@ -48,6 +49,7 @@ Other targets are available for explicit platforms and architectures:
 ```sh
 make linux-arm64
 make linux-amd64
+make linux-ppc32be
 make macos-arm64
 make macos-amd64
 make all
@@ -59,6 +61,7 @@ toolchain. Override the target compiler when its name differs from the default:
 ```sh
 make linux-arm64 CC_ARM64=aarch64-linux-gnu-gcc
 make linux-amd64 CC_AMD64=x86_64-linux-gnu-gcc
+make linux-ppc32be CC_PPC32BE=powerpc-linux-gnu-gcc
 ```
 
 Apple Clang can build either macOS architecture with `-arch`. Windows timing
@@ -77,7 +80,8 @@ The exact filename depends on the host platform and architecture.
 
 Pushing a Git tag runs the GitHub Actions build and correctness tests. If they
 succeed, the workflow creates a GitHub Release named `Release <tag name>` with
-Linux and macOS archives for AMD64 and ARM64, plus a `SHA256SUMS` file.
+Linux archives for AMD64, ARM64, and PPC32 big-endian, macOS archives for AMD64
+and ARM64, and a `SHA256SUMS` file.
 
 ## Scores
 
@@ -115,13 +119,14 @@ normal.
 
 ## Architecture support
 
-The assembly kernels use only baseline instructions for their architecture:
+The kernel backends use only baseline instructions for their architecture:
 
 * `src/fossmark.S` uses ARMv8-A and NEON under AAPCS64.
 * `src/fossmark_x86_64.S` uses baseline x86-64 and SSE2 under the System V ABI.
+* `src/fossmark_ppc32.c` is endian-safe and uses baseline 32-bit PowerPC operations. It avoids AltiVec so it runs on the Wii's PowerPC 750CL-class CPU.
 
-The kernel files contain no system calls or calls into the C library. The same
-ARM64 source can be assembled for Linux, macOS, Windows, and BSD object formats.
+The assembly kernel files contain no system calls or calls into the C library.
+The same ARM64 source can be assembled for Linux, macOS, Windows, and BSD object formats.
 The current x86-64 source supports Linux, macOS, and the BSDs that use the
 System V calling convention.
 
@@ -149,8 +154,8 @@ with a nonzero status if any check fails.
 src/main.c              portable benchmark driver and scoring
 src/fossmark.S          ARM64 kernels
 src/fossmark_x86_64.S   x86-64 kernels
+src/fossmark_ppc32.c    PPC32 big-endian kernels
 src/test_kernels.c      correctness suite
 Makefile                native and cross-build targets
 dist/                   generated binaries
 ```
-

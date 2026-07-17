@@ -45,6 +45,11 @@
 #  define D_INT  "64-bit ALU: imul, mul, div, bitops"
 #  define D_FP   "double: mulsd/addsd, divsd, sqrtsd"
 #  define D_SIMD "SSE2: 128-bit integer + float"
+#elif defined(__powerpc__) && !defined(__powerpc64__)
+#  define FM_ARCH "PowerPC 32-bit big-endian"
+#  define D_INT  "PPC32 integer ALU and software 64-bit arithmetic"
+#  define D_FP   "PowerPC scalar double-precision floating point"
+#  define D_SIMD "PPC32 parallel integer workload"
 #else
 #  define FM_ARCH "unknown"
 #  define D_INT  "64-bit integer ALU"
@@ -603,13 +608,11 @@ static double display_metric(const struct test *t, const struct result *r)
 static void print_header(void)
 {
 	printf("\n");
-	printf("  fossmark 1.0 - multi-core CPU benchmark\n");
+	printf("  fossbench1.0 - multi-core CPU benchmark\n");
 	printf("  ------------------------------------------------------------------\n");
 	printf("  platform: %s/%s\n", FM_OS, FM_ARCH);
-	printf("  cores:    %ld (each test is run once on 1 core, once on all %ld)\n",
+	printf("  cores:    %ld\n",
 	       g_ncores, g_ncores);
-	printf("\n");
-	printf("  RATE/TIME/SCORE below are the all-core (multi-core) pass.\n");
 	printf("\n");
 	printf("  %-24s %12s  %-11s %8s %9s\n",
 	       "TEST", "RATE", "UNIT", "TIME", "SCORE");
@@ -700,8 +703,6 @@ int main(int argc, char **argv)
 	       exp(multi_log_sum / weight_sum));
 	printf("  %-24s %44.0f\n", "SINGLECORE SCORE",
 	       exp(single_log_sum / weight_sum));
-	printf("  %-24s (weighted geometric means, reference machine = %.0f)\n",
-	       "", FM_TARGET_SCORE);
 	printf("\n");
 
 	teardown();

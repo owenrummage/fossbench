@@ -3,6 +3,7 @@
 # The assembly kernels are architecture-specific:
 #   src/fossmark.S         AArch64 (ARM64)
 #   src/fossmark_x86_64.S  x86-64  (AMD64)
+#   src/fossmark_ppc32.c   PowerPC 32-bit, including big-endian systems
 # The C driver (src/main.c) is portable across architectures and OSes. A
 # "binary that runs everywhere" is not possible - each OS/arch pair uses a
 # different executable format and instruction set - so output is named per
@@ -42,6 +43,7 @@ DIST      := dist
 DRIVER    := src/main.c
 ASM_ARM64 := src/fossmark.S
 ASM_AMD64 := src/fossmark_x86_64.S
+SRC_PPC32 := src/fossmark_ppc32.c
 
 # ---- host detection: normalise `uname -m` to our arch names ----
 HOST_ARCH := $(shell uname -m)
@@ -50,10 +52,16 @@ ifneq (,$(filter aarch64 arm64,$(HOST_ARCH)))
 	HOST_ASM      := $(ASM_ARM64)
 else ifneq (,$(filter x86_64 amd64,$(HOST_ARCH)))
 	HOST_ARCHNAME := amd64
-	HOST_ASM      := $(ASM_AMD64)
+	HOST_KERNEL   := $(ASM_AMD64)
+else ifneq (,$(filter ppc powerpc ppc32 powerpc32,$(HOST_ARCH)))
+	HOST_ARCHNAME := ppc32be
+	HOST_KERNEL   := $(SRC_PPC32)
 else
 	HOST_ARCHNAME := $(HOST_ARCH)
-	HOST_ASM      := $(ASM_ARM64)
+	$(error unsupported host architecture '$(HOST_ARCH)')
+endif
+ifeq ($(HOST_ARCHNAME),arm64)
+	HOST_KERNEL := $(ASM_ARM64)
 endif
 
 # ---- host OS name for the native binary ----
@@ -81,21 +89,27 @@ else
 endif
 CC_MACOS_ARM64 ?= $(CC)
 CC_MACOS_AMD64 ?= $(CC)
+ifeq ($(HOST_ARCHNAME),ppc32be)
+	CC_PPC32BE ?= $(CC)
+else
+	CC_PPC32BE ?= powerpc-linux-gnu-gcc
+endif
 
 NATIVE_BIN := $(DIST)/fossmark-$(OSNAME)-$(HOST_ARCHNAME)
 
 # `make` with no target builds the host binary, as before.
 .DEFAULT_GOAL := native
-.PHONY: all native linux-arm64 linux-amd64 macos-arm64 macos-amd64 bench test clean
+.PHONY: all native linux-arm64 linux-amd64 linux-ppc32be macos-arm64 macos-amd64 bench test clean
 
-# `make all` builds both Linux binaries.
-all: linux-arm64 linux-amd64
+# `make all` builds all Linux binaries.
+all: linux-arm64 linux-amd64 linux-ppc32be
 
 # `make native` (and bare `make`) build for whatever host you are on.
 native: $(NATIVE_BIN)
 
 linux-arm64: $(DIST)/fossmark-linux-arm64
 linux-amd64: $(DIST)/fossmark-linux-amd64
+linux-ppc32be: $(DIST)/fossmark-linux-ppc32be
 macos-arm64: $(DIST)/fossmark-macos-arm64
 macos-amd64: $(DIST)/fossmark-macos-amd64
 
@@ -105,6 +119,10 @@ $(DIST)/fossmark-linux-arm64: $(DRIVER) $(ASM_ARM64) | $(DIST)
 
 $(DIST)/fossmark-linux-amd64: $(DRIVER) $(ASM_AMD64) | $(DIST)
 	$(CC_AMD64) $(CFLAGS) $(PTHREAD) -o $@ $(DRIVER) $(ASM_AMD64) $(LDLIBS)
+	@echo "built $@"
+
+$(DIST)/fossmark-linux-ppc32be: $(DRIVER) $(SRC_PPC32) | $(DIST)
+	$(CC_PPC32BE) $(CFLAGS) $(PTHREAD) -o $@ $(DRIVER) $(SRC_PPC32) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossmark-macos-arm64: $(DRIVER) $(ASM_ARM64) | $(DIST)
@@ -124,6 +142,9 @@ endif
 ifeq ($(OSNAME)-$(HOST_ARCHNAME),linux-amd64)
 NATIVE_HAS_RULE := yes
 endif
+ifeq ($(OSNAME)-$(HOST_ARCHNAME),linux-ppc32be)
+NATIVE_HAS_RULE := yes
+endif
 ifeq ($(OSNAME)-$(HOST_ARCHNAME),macos-arm64)
 NATIVE_HAS_RULE := yes
 endif
@@ -131,8 +152,8 @@ ifeq ($(OSNAME)-$(HOST_ARCHNAME),macos-amd64)
 NATIVE_HAS_RULE := yes
 endif
 ifneq ($(NATIVE_HAS_RULE),yes)
-$(NATIVE_BIN): $(DRIVER) $(HOST_ASM) | $(DIST)
-	$(CC) $(CFLAGS) $(PTHREAD) -o $@ $(DRIVER) $(HOST_ASM) $(LDLIBS)
+$(NATIVE_BIN): $(DRIVER) $(HOST_KERNEL) | $(DIST)
+	$(CC) $(CFLAGS) $(PTHREAD) -o $@ $(DRIVER) $(HOST_KERNEL) $(LDLIBS)
 	@echo "built $@"
 endif
 
@@ -145,7 +166,7 @@ bench: $(NATIVE_BIN)
 
 # Build and run the kernel correctness tests for the host arch.
 test: | $(DIST)
-	$(CC) $(CFLAGS) $(PTHREAD) -o $(DIST)/test_kernels src/test_kernels.c $(HOST_ASM) $(LDLIBS)
+	$(CC) $(CFLAGS) $(PTHREAD) -o $(DIST)/test_kernels src/test_kernels.c $(HOST_KERNEL) $(LDLIBS)
 	./$(DIST)/test_kernels
 
 clean:

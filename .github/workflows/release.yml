@@ -34,6 +34,8 @@ jobs:
             os: ubuntu-24.04
           - target: linux-arm64
             os: ubuntu-24.04
+          - target: linux-ppc32be
+            os: ubuntu-24.04
           - target: macos-amd64
             os: macos-14
           - target: macos-arm64
@@ -48,6 +50,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes gcc-aarch64-linux-gnu
+
+      - name: Install the Linux PPC32 big-endian cross-compiler
+        if: matrix.target == 'linux-ppc32be'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gcc-powerpc-linux-gnu
 
       - name: Build
         run: make ${{ matrix.target }}
