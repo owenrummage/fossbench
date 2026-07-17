@@ -30,13 +30,23 @@
 #  define SYM(name) name
 #endif
 
+#define FN_BEGIN(name) FN_BEGIN_ASM SYM(name)
+#define FN_END(name)   FN_END_ASM SYM(name)
+
+	.macro	FN_BEGIN_ASM name
+	.p2align 4
+	.globl	\name
 #if defined(__ELF__)
-#  define FN_BEGIN(name) .p2align 4 ; .globl SYM(name) ; .type SYM(name), @function ; SYM(name):
-#  define FN_END(name)   .size SYM(name), . - SYM(name)
-#else
-#  define FN_BEGIN(name) .p2align 4 ; .globl SYM(name) ; SYM(name):
-#  define FN_END(name)
+	.type	\name, @function
 #endif
+\name:
+	.endm
+
+	.macro	FN_END_ASM name
+#if defined(__ELF__)
+	.size	\name, . - \name
+#endif
+	.endm
 
 	.text
 

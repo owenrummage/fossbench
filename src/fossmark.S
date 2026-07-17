@@ -19,21 +19,34 @@
 #  define SYM(name) name
 #endif
 
+#define FN_BEGIN(name) FN_BEGIN_ASM SYM(name)
+#define FN_END(name)   FN_END_ASM SYM(name)
+
+	.macro	FN_BEGIN_ASM name
+	.p2align 4
+	.globl	\name
 #if defined(__ELF__)
-#  define FN_BEGIN(name) .p2align 4 ; .globl SYM(name) ; .type SYM(name), %function ; SYM(name):
-#  define FN_END(name)   .size SYM(name), . - SYM(name)
-#else
-#  define FN_BEGIN(name) .p2align 4 ; .globl SYM(name) ; SYM(name):
-#  define FN_END(name)
+	.type	\name, %function
 #endif
+\name:
+	.endm
+
+	.macro	FN_END_ASM name
+#if defined(__ELF__)
+	.size	\name, . - \name
+#endif
+	.endm
 
 /* Materialise a 64-bit constant without a literal pool, so no relocations and
  * no .ltorg placement worries across object formats. */
-#define MOV64(reg, val)                             \
-	movz	reg, #((val) & 0xffff)             ;\
-	movk	reg, #(((val) >> 16) & 0xffff), lsl #16 ;\
-	movk	reg, #(((val) >> 32) & 0xffff), lsl #32 ;\
-	movk	reg, #(((val) >> 48) & 0xffff), lsl #48
+#define MOV64(reg, val) MOV64_ASM reg, val
+
+	.macro	MOV64_ASM reg, val
+	movz	\reg, #((\val) & 0xffff)
+	movk	\reg, #(((\val) >> 16) & 0xffff), lsl #16
+	movk	\reg, #(((\val) >> 32) & 0xffff), lsl #32
+	movk	\reg, #(((\val) >> 48) & 0xffff), lsl #48
+	.endm
 
 	.text
 
@@ -527,25 +540,31 @@ FN_END(fm_compress)
  * =================================================================== */
 
 /* rotate each 32-bit lane left by n, via shl + shift-right-and-insert */
-#define VROTL(vd, vs, vt, n)                    \
-	shl	vt##.4s, vs##.4s, #(n)         ;\
-	sri	vt##.4s, vs##.4s, #(32 - (n))  ;\
-	mov	vd##.16b, vt##.16b
+#define VROTL(vd, vs, vt, n) VROTL_ASM vd, vs, vt, n
+
+	.macro	VROTL_ASM vd, vs, vt, n
+	shl	\vt\().4s, \vs\().4s, #(\n)
+	sri	\vt\().4s, \vs\().4s, #(32 - (\n))
+	mov	\vd\().16b, \vt\().16b
+	.endm
 
 /* one ChaCha quarter-round over rows a,b,c,d using v24 as scratch */
-#define QROUND(a, b, c, d)                      \
-	add	a##.4s, a##.4s, b##.4s         ;\
-	eor	d##.16b, d##.16b, a##.16b      ;\
-	rev32	d##.8h, d##.8h                 ;\
-	add	c##.4s, c##.4s, d##.4s         ;\
-	eor	b##.16b, b##.16b, c##.16b      ;\
-	VROTL(b, b, v24, 12)                   ;\
-	add	a##.4s, a##.4s, b##.4s         ;\
-	eor	d##.16b, d##.16b, a##.16b      ;\
-	VROTL(d, d, v24, 8)                    ;\
-	add	c##.4s, c##.4s, d##.4s         ;\
-	eor	b##.16b, b##.16b, c##.16b      ;\
-	VROTL(b, b, v24, 7)
+#define QROUND(a, b, c, d) QROUND_ASM a, b, c, d
+
+	.macro	QROUND_ASM a, b, c, d
+	add	\a\().4s, \a\().4s, \b\().4s
+	eor	\d\().16b, \d\().16b, \a\().16b
+	rev32	\d\().8h, \d\().8h
+	add	\c\().4s, \c\().4s, \d\().4s
+	eor	\b\().16b, \b\().16b, \c\().16b
+	VROTL_ASM \b, \b, v24, 12
+	add	\a\().4s, \a\().4s, \b\().4s
+	eor	\d\().16b, \d\().16b, \a\().16b
+	VROTL_ASM \d, \d, v24, 8
+	add	\c\().4s, \c\().4s, \d\().4s
+	eor	\b\().16b, \b\().16b, \c\().16b
+	VROTL_ASM \b, \b, v24, 7
+	.endm
 
 FN_BEGIN(fm_chacha20)
 	and	x1, x1, #~63			/* whole 64-byte blocks only */
