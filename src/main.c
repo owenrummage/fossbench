@@ -758,7 +758,7 @@ static void json_escape(const char *src, char *dst, size_t cap)
 
 #if !defined(_WIN32)
 static int upload_results(const struct system_info *info, double score,
-			  uint64_t duration_ms, const char *token)
+			  uint64_t duration_ms)
 {
 	char host[256], port[16], path[512], payload[2048], request[4096];
 	char cpu[512], os[512], compiler[256], response[512];
@@ -805,8 +805,8 @@ static int upload_results(const struct system_info *info, double score,
 	if (payload_len < 0 || (size_t)payload_len >= sizeof(payload)) return 0;
 	request_len = snprintf(request, sizeof(request),
 		"POST %s HTTP/1.1\r\nHost: %s:%s\r\nContent-Type: application/json\r\n"
-		"Authorization: Bearer %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
-		path, host, port, token, payload_len, payload);
+		"Content-Length: %d\r\nConnection: close\r\n\r\n%s",
+		path, host, port, payload_len, payload);
 	if (request_len < 0 || (size_t)request_len >= sizeof(request)) return 0;
 
 	memset(&hints, 0, sizeof(hints)); hints.ai_socktype = SOCK_STREAM; hints.ai_family = AF_UNSPEC;
@@ -984,16 +984,11 @@ int main(int argc, char **argv)
 		fflush(stdout);
 		if (fgets(answer, sizeof(answer), stdin) &&
 		    (answer[0] == 'y' || answer[0] == 'Y')) {
-			const char *token = getenv("FOSSMARK_API_TOKEN");
-			if (!token || !*token) {
-				fprintf(stderr, "  Upload skipped: set FOSSMARK_API_TOKEN to your API token.\n");
-			} else {
 #if defined(_WIN32)
-				fprintf(stderr, "  Upload is not yet supported on Windows.\n");
+			fprintf(stderr, "  Upload is not yet supported on Windows.\n");
 #else
-				upload_results(&system_info, multicore_score, duration_ms, token);
+			upload_results(&system_info, multicore_score, duration_ms);
 #endif
-			}
 		} else {
 			printf("  Result was not uploaded.\n");
 		}

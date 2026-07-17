@@ -150,6 +150,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
+          gh release delete "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --yes 2>/dev/null || true
           gh release create "$RELEASE_TAG" \
             release/fossmark-*.tar.gz \
             release/SHA256SUMS \

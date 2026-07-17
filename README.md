@@ -80,12 +80,8 @@ The exact filename depends on the host platform and architecture.
 At startup, fossmark reports the detected CPU model, physical cores, logical
 threads, installed memory, operating system, architecture, and compiler. At the
 end it prints the composite scores and total benchmark duration, then asks
-whether to upload the result. Uploading is opt-in and requires an API token in
-the environment:
-
-```sh
-FOSSMARK_API_TOKEN=your_token ./dist/fossmark-linux-amd64
-```
+whether to upload the result. Uploading is anonymous and opt-in; no account or
+API token is required.
 
 The API base URL is defined by `FM_API_BASE_URL` in `src/main.c` and defaults to
 `https://fossbench.net`. A release build can override it without editing the
