@@ -72,6 +72,7 @@ jobs:
           OPENSSL_VERSION: 3.5.7
           OPENSSL_TARGET: ${{ matrix.openssl_target }}
           CROSS_PREFIX: ${{ matrix.cross_prefix }}
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.target == 'macos-amd64' && '10.5' || '' }}
         run: |
           curl --fail --location --retry 3 \
             "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz" \
@@ -105,6 +106,8 @@ jobs:
 
       - name: Build macOS executable with static OpenSSL
         if: startsWith(matrix.target, 'macos-')
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.target == 'macos-amd64' && '10.5' || '' }}
         run: |
           OPENSSL_LIBDIR="$(find "$GITHUB_WORKSPACE/openssl-static" -type f -name libssl.a -exec dirname {} \;)"
           make "${{ matrix.target }}" \

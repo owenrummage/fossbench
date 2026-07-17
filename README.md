@@ -71,6 +71,11 @@ Apple Clang can build either macOS architecture with `-arch`. Windows timing
 and allocation code exists in the driver, but the Makefile does not include a
 Windows target and the x86-64 assembly currently follows the System V ABI.
 
+The macOS AMD64 target is linked for macOS 10.5 and disables chained fixups so
+its Mach-O load commands are understood by legacy Intel Macs. Override the
+deployment floor when needed with `MACOS_AMD64_MIN`, for example
+`make macos-amd64 MACOS_AMD64_MIN=10.8`.
+
 Run the benchmark with extra per-test details by passing `--verbose`:
 
 ```sh

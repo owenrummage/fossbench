@@ -102,6 +102,7 @@ else
 endif
 CC_MACOS_ARM64 ?= $(CC)
 CC_MACOS_AMD64 ?= $(CC)
+MACOS_AMD64_MIN ?= 10.5
 ifeq ($(HOST_ARCHNAME),ppc32be)
 	CC_PPC32BE ?= $(CC)
 else
@@ -153,7 +154,7 @@ $(DIST)/fossmark-macos-arm64: $(DRIVER) $(ASM_ARM64) | $(DIST)
 	@echo "built $@"
 
 $(DIST)/fossmark-macos-amd64: $(DRIVER) $(ASM_AMD64) | $(DIST)
-	$(CC_MACOS_AMD64) -arch x86_64 $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_AMD64) $(LDLIBS)
+	MACOSX_DEPLOYMENT_TARGET=$(MACOS_AMD64_MIN) $(CC_MACOS_AMD64) -arch x86_64 -mmacosx-version-min=$(MACOS_AMD64_MIN) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -Wl,-no_fixup_chains -o $@ $(DRIVER) $(ASM_AMD64) $(LDLIBS)
 	@echo "built $@"
 
 # When the host is Linux/ARM64 or Linux/AMD64, the native binary IS one of the

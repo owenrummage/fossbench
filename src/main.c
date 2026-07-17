@@ -35,13 +35,14 @@
 #if defined(__APPLE__)
 #  include <sys/types.h>
 #  include <sys/sysctl.h>
+#  include <mach/mach_time.h>
 #endif
 
 /* Change this at build time with -DFM_API_BASE_URL=\"https://host\". */
 #ifndef FM_API_BASE_URL
 #  define FM_API_BASE_URL "https://fossbench.net"
 #endif
-#define FM_VERSION "0.1.3-hotfix1"
+#define FM_VERSION "0.1.3-hotfix2"
 
 /* ---------- platform identification (for the banner only) ---------- */
 
@@ -93,6 +94,18 @@ static double now_seconds(void)
 	QueryPerformanceFrequency(&f);
 	QueryPerformanceCounter(&t);
 	return (double)t.QuadPart / (double)f.QuadPart;
+}
+#elif defined(__APPLE__)
+static double now_seconds(void)
+{
+	static mach_timebase_info_data_t timebase;
+	uint64_t ticks;
+
+	if (timebase.denom == 0)
+		mach_timebase_info(&timebase);
+	ticks = mach_absolute_time();
+	return (double)ticks * (double)timebase.numer /
+	       (double)timebase.denom * 1e-9;
 }
 #else
 #  include <time.h>
