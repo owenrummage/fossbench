@@ -154,7 +154,3 @@ Makefile                native and cross-build targets
 dist/                   generated binaries
 ```
 
-## License
-
-No license file is included in this repository yet. Add one before distributing
-fossbench or accepting outside contributions as an open-source project.
