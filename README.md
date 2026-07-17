@@ -34,7 +34,8 @@ distorting the result.
 
 ## Build and run
 
-You need a C compiler, GNU Make, pthreads, and the system math library.
+You need a C compiler, GNU Make, OpenSSL development headers and libraries,
+pthreads, and the system math library.
 
 ```sh
 make
@@ -55,7 +56,7 @@ make macos-amd64
 make all
 ```
 
-`make all` builds both Linux targets. Cross-compilation requires a suitable
+`make all` builds all three Linux targets. Cross-compilation requires a suitable
 toolchain. Override the target compiler when its name differs from the default:
 
 ```sh
@@ -87,15 +88,18 @@ FOSSMARK_API_TOKEN=your_token ./dist/fossmark-linux-amd64
 ```
 
 The API base URL is defined by `FM_API_BASE_URL` in `src/main.c` and defaults to
-`http://localhost:8080`. A release build can override it without editing the
+`https://fossbench.net`. A release build can override it without editing the
 source:
 
 ```sh
-make CFLAGS='-O2 -Wall -Wextra -DFM_API_BASE_URL=\"http://bench.example.com\"'
+make CFLAGS='-O2 -Wall -Wextra -DFM_API_BASE_URL=\"https://bench.example.com\"'
 ```
 
-The built-in uploader currently supports plain HTTP. An HTTPS production URL
-will require TLS support (or submission through a TLS-terminating local proxy).
+HTTPS uploads use OpenSSL with certificate and hostname verification.
+
+Release binaries statically include OpenSSL. Linux releases are fully static;
+macOS releases retain only Apple's required system-library linkage because the
+macOS toolchain does not support fully static executables.
 
 ## Continuous integration and releases
 

@@ -32,14 +32,24 @@ jobs:
         include:
           - target: linux-amd64
             os: ubuntu-24.04
+            openssl_target: linux-x86_64
+            cross_prefix: ''
           - target: linux-arm64
             os: ubuntu-24.04
+            openssl_target: linux-aarch64
+            cross_prefix: aarch64-linux-gnu-
           - target: linux-ppc32be
             os: ubuntu-24.04
+            openssl_target: linux-ppc
+            cross_prefix: powerpc-linux-gnu-
           - target: macos-amd64
             os: macos-14
+            openssl_target: darwin64-x86_64-cc
+            cross_prefix: ''
           - target: macos-arm64
             os: macos-14
+            openssl_target: darwin64-arm64-cc
+            cross_prefix: ''
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out source
@@ -57,8 +67,49 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes gcc-powerpc-linux-gnu
 
-      - name: Build
-        run: make ${{ matrix.target }}
+      - name: Build static OpenSSL
+        env:
+          OPENSSL_VERSION: 3.5.7
+          OPENSSL_TARGET: ${{ matrix.openssl_target }}
+          CROSS_PREFIX: ${{ matrix.cross_prefix }}
+        run: |
+          curl --fail --location --retry 3 \
+            "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz" \
+            --output openssl.tar.gz
+          tar -xzf openssl.tar.gz
+          cd "openssl-${OPENSSL_VERSION}"
+          CROSS_COMPILE="$CROSS_PREFIX" ./Configure "$OPENSSL_TARGET" \
+            no-shared no-tests no-module no-dso \
+            --prefix="$GITHUB_WORKSPACE/openssl-static" \
+            --openssldir=/etc/ssl
+          make -j3 build_sw
+          make install_sw
+
+      - name: Build static Linux executable
+        if: startsWith(matrix.target, 'linux-')
+        run: |
+          OPENSSL_LIBDIR="$(find "$GITHUB_WORKSPACE/openssl-static" -type f -name libssl.a -exec dirname {} \;)"
+          make "${{ matrix.target }}" \
+            TLS_CFLAGS="-I$GITHUB_WORKSPACE/openssl-static/include" \
+            TLS_LDLIBS="$OPENSSL_LIBDIR/libssl.a $OPENSSL_LIBDIR/libcrypto.a -ldl" \
+            LDFLAGS=-static
+          file "dist/fossmark-${{ matrix.target }}"
+          if ldd "dist/fossmark-${{ matrix.target }}" 2>&1 | grep -q '=>'; then
+            echo 'Linux release binary is dynamically linked' >&2
+            exit 1
+          fi
+
+      - name: Build macOS executable with static OpenSSL
+        if: startsWith(matrix.target, 'macos-')
+        run: |
+          OPENSSL_LIBDIR="$(find "$GITHUB_WORKSPACE/openssl-static" -type f -name libssl.a -exec dirname {} \;)"
+          make "${{ matrix.target }}" \
+            TLS_CFLAGS="-I$GITHUB_WORKSPACE/openssl-static/include" \
+            TLS_LDLIBS="$OPENSSL_LIBDIR/libssl.a $OPENSSL_LIBDIR/libcrypto.a"
+          if otool -L "dist/fossmark-${{ matrix.target }}" | grep -E 'lib(ssl|crypto)'; then
+            echo 'macOS release uses dynamic OpenSSL' >&2
+            exit 1
+          fi
 
       - name: Package artifact
         run: tar -czf fossmark-${{ matrix.target }}.tar.gz -C dist fossmark-${{ matrix.target }}

@@ -35,7 +35,9 @@
 
 CC      ?= cc
 CFLAGS  ?= -O2 -Wall -Wextra
-LDLIBS  ?= -lm
+TLS_CFLAGS ?=
+TLS_LDLIBS ?= -lssl -lcrypto
+LDLIBS  ?= -lm $(TLS_LDLIBS)
 # The driver spreads each workload across all cores with pthreads.
 PTHREAD := -pthread
 
@@ -115,23 +117,23 @@ macos-arm64: $(DIST)/fossmark-macos-arm64
 macos-amd64: $(DIST)/fossmark-macos-amd64
 
 $(DIST)/fossmark-linux-arm64: $(DRIVER) $(ASM_ARM64) | $(DIST)
-	$(CC_ARM64) $(CFLAGS) $(PTHREAD) -o $@ $(DRIVER) $(ASM_ARM64) $(LDLIBS)
+	$(CC_ARM64) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_ARM64) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossmark-linux-amd64: $(DRIVER) $(ASM_AMD64) | $(DIST)
-	$(CC_AMD64) $(CFLAGS) $(PTHREAD) -o $@ $(DRIVER) $(ASM_AMD64) $(LDLIBS)
+	$(CC_AMD64) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_AMD64) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossmark-linux-ppc32be: $(DRIVER) $(SRC_PPC32) $(ASM_PPC32) | $(DIST)
-	$(CC_PPC32BE) $(CFLAGS) $(PTHREAD) -o $@ $(DRIVER) $(SRC_PPC32) $(ASM_PPC32) $(LDLIBS)
+	$(CC_PPC32BE) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(SRC_PPC32) $(ASM_PPC32) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossmark-macos-arm64: $(DRIVER) $(ASM_ARM64) | $(DIST)
-	$(CC_MACOS_ARM64) -arch arm64 $(CFLAGS) $(PTHREAD) -o $@ $(DRIVER) $(ASM_ARM64) $(LDLIBS)
+	$(CC_MACOS_ARM64) -arch arm64 $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_ARM64) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossmark-macos-amd64: $(DRIVER) $(ASM_AMD64) | $(DIST)
-	$(CC_MACOS_AMD64) -arch x86_64 $(CFLAGS) $(PTHREAD) -o $@ $(DRIVER) $(ASM_AMD64) $(LDLIBS)
+	$(CC_MACOS_AMD64) -arch x86_64 $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_AMD64) $(LDLIBS)
 	@echo "built $@"
 
 # When the host is Linux/ARM64 or Linux/AMD64, the native binary IS one of the
@@ -154,7 +156,7 @@ NATIVE_HAS_RULE := yes
 endif
 ifneq ($(NATIVE_HAS_RULE),yes)
 $(NATIVE_BIN): $(DRIVER) $(HOST_KERNEL) | $(DIST)
-	$(CC) $(CFLAGS) $(PTHREAD) -o $@ $(DRIVER) $(HOST_KERNEL) $(LDLIBS)
+	$(CC) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(HOST_KERNEL) $(LDLIBS)
 	@echo "built $@"
 endif
 
@@ -167,7 +169,7 @@ bench: $(NATIVE_BIN)
 
 # Build and run the kernel correctness tests for the host arch.
 test: | $(DIST)
-	$(CC) $(CFLAGS) $(PTHREAD) -o $(DIST)/test_kernels src/test_kernels.c $(HOST_KERNEL) $(LDLIBS)
+	$(CC) $(CFLAGS) $(PTHREAD) -o $(DIST)/test_kernels src/test_kernels.c $(HOST_KERNEL) -lm
 	./$(DIST)/test_kernels
 
 clean:

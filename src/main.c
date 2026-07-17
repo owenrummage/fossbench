@@ -29,15 +29,17 @@
 #  include <sys/socket.h>
 #  include <sys/utsname.h>
 #  include <netdb.h>
+#  include <openssl/ssl.h>
+#  include <openssl/err.h>
 #endif
 #if defined(__APPLE__)
 #  include <sys/types.h>
 #  include <sys/sysctl.h>
 #endif
 
-/* Change this at build time with -DFM_API_BASE_URL=\"http://host:port\". */
+/* Change this at build time with -DFM_API_BASE_URL=\"https://host\". */
 #ifndef FM_API_BASE_URL
-#  define FM_API_BASE_URL "http://localhost:8080"
+#  define FM_API_BASE_URL "https://fossbench.net"
 #endif
 #define FM_VERSION "0.1.2"
 
@@ -758,17 +760,23 @@ static void json_escape(const char *src, char *dst, size_t cap)
 static int upload_results(const struct system_info *info, double score,
 			  uint64_t duration_ms, const char *token)
 {
-	char host[256], port[16] = "80", path[512], payload[2048], request[4096];
+	char host[256], port[16], path[512], payload[2048], request[4096];
 	char cpu[512], os[512], compiler[256], response[512];
 	const char *base = FM_API_BASE_URL, *p, *slash, *colon;
 	struct addrinfo hints, *addresses = NULL, *a;
-	int fd = -1, status = 0, payload_len, request_len;
+	SSL_CTX *tls_ctx = NULL;
+	SSL *tls = NULL;
+	int use_tls, fd = -1, status = 0, payload_len, request_len;
 
-	if (strncmp(base, "http://", 7) != 0) {
-		fprintf(stderr, "  upload error: FM_API_BASE_URL must use http://\n");
+	if (!strncmp(base, "https://", 8)) {
+		use_tls = 1; p = base + 8; strcpy(port, "443");
+	} else if (!strncmp(base, "http://", 7)) {
+		use_tls = 0; p = base + 7; strcpy(port, "80");
+	} else {
+		fprintf(stderr, "  upload error: unsupported URL scheme\n");
 		return 0;
 	}
-	p = base + 7; slash = strchr(p, '/');
+	slash = strchr(p, '/');
 	if (!slash) slash = p + strlen(p);
 	colon = memchr(p, ':', (size_t)(slash - p));
 	if (colon) {
@@ -811,23 +819,49 @@ static int upload_results(const struct system_info *info, double score,
 	}
 	freeaddrinfo(addresses);
 	if (fd < 0) { fprintf(stderr, "  upload error: cannot connect to %s:%s\n", host, port); return 0; }
+	if (use_tls) {
+		tls_ctx = SSL_CTX_new(TLS_client_method());
+		if (!tls_ctx || !SSL_CTX_set_default_verify_paths(tls_ctx)) {
+			fprintf(stderr, "  upload error: cannot initialize TLS trust store\n");
+			goto upload_failed;
+		}
+		SSL_CTX_set_verify(tls_ctx, SSL_VERIFY_PEER, NULL);
+		tls = SSL_new(tls_ctx);
+		if (!tls || !SSL_set_tlsext_host_name(tls, host) ||
+		    !SSL_set1_host(tls, host) || !SSL_set_fd(tls, fd) ||
+		    SSL_connect(tls) != 1) {
+			fprintf(stderr, "  upload error: TLS connection or certificate verification failed\n");
+			goto upload_failed;
+		}
+	}
 	{
 		size_t sent = 0;
 		while (sent < (size_t)request_len) {
-			ssize_t n = send(fd, request + sent, (size_t)request_len - sent, 0);
-			if (n <= 0) { close(fd); fprintf(stderr, "  upload error: send failed\n"); return 0; }
+			int n = use_tls ? SSL_write(tls, request + sent, (int)((size_t)request_len - sent)) :
+				(int)send(fd, request + sent, (size_t)request_len - sent, 0);
+			if (n <= 0) { fprintf(stderr, "  upload error: send failed\n"); goto upload_failed; }
 			sent += (size_t)n;
 		}
 	}
 	{
-		ssize_t n = recv(fd, response, sizeof(response) - 1, 0); close(fd);
-		if (n <= 0) { fprintf(stderr, "  upload error: no server response\n"); return 0; }
+		int n = use_tls ? SSL_read(tls, response, sizeof(response) - 1) :
+			(int)recv(fd, response, sizeof(response) - 1, 0);
+		if (n <= 0) { fprintf(stderr, "  upload error: no server response\n"); goto upload_failed; }
 		response[n] = '\0';
 		if (sscanf(response, "HTTP/%*s %d", &status) != 1) status = 0;
 	}
+	if (tls) { SSL_shutdown(tls); SSL_free(tls); }
+	if (tls_ctx) SSL_CTX_free(tls_ctx);
+	close(fd);
 	if (status < 200 || status >= 300) { fprintf(stderr, "  upload failed: server returned HTTP %d\n", status); return 0; }
 	printf("  Results uploaded successfully (HTTP %d).\n", status);
 	return 1;
+
+upload_failed:
+	if (tls) SSL_free(tls);
+	if (tls_ctx) SSL_CTX_free(tls_ctx);
+	if (fd >= 0) close(fd);
+	return 0;
 }
 #endif
 
