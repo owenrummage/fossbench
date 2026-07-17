@@ -1,124 +1,154 @@
-# Fossmark
+# fossbench
 
-A single-threaded CPU benchmark for ARM64 (AArch64), with the numeric kernels
-hand-written in assembly and a small portable C driver to run and score them.
+fossbench is an open-source CPU benchmark with nine assembly workloads and a
+small C driver. It measures each workload twice: once on a single core and once
+across every available core. The final report includes separate single-core and
+multicore scores.
 
-## What it measures
+The repository currently builds an executable named `fossmark` for ARM64 and
+x86-64. The C driver handles timing, memory, threads, output, and scoring. The
+performance-sensitive kernels live in architecture-specific assembly files.
 
-Nine workloads, each a tight assembly kernel:
+## Workloads
 
-| # | Test                    | What it exercises                                            |
-|---|-------------------------|--------------------------------------------------------------|
-| 1 | Integer Math            | 64-bit ALU: `madd`, `umulh`/`smulh`, `udiv`/`sdiv`, bit ops  |
-| 2 | Floating Point Math     | scalar double: `fmadd`, `fdiv`, `fsqrt`                      |
-| 3 | Prime Numbers           | sieve of Eratosthenes to 2,000,000 (strided memory + ALU)   |
-| 4 | Extended Instructions   | NEON/ASIMD: 128-bit integer, widening, table, float vectors |
-| 5 | Compression             | LZ77 match-finder over a 4 MiB corpus (branchy, cache probe) |
-| 6 | Encryption              | ChaCha20, 20 rounds, NEON, over 1 MiB                        |
-| 7 | Physics                 | 512-body direct-summation gravity, double precision         |
-| 8 | Sorting                 | in-place heapsort of 1M `uint32` (branch + cache stress)    |
-| 9 | Single-Threaded         | dependent-load pointer chase over 16 MiB (memory latency)   |
+| Test | What it measures |
+|---|---|
+| Integer math | 64-bit multiplication, division, shifts, and bit operations |
+| Floating point math | Scalar double-precision multiplication, addition, division, and square roots |
+| Prime numbers | A sieve of Eratosthenes up to 2,000,000 |
+| Extended instructions | 128-bit SIMD integer and floating point work using NEON or SSE2 |
+| Compression | An LZ77 match finder over a 4 MiB generated corpus |
+| Encryption | ChaCha20 with 20 rounds over a 1 MiB buffer |
+| Physics | Direct-sum gravity for 512 bodies |
+| Sorting | In-place heapsort of one million 32-bit integers |
+| Memory latency | Dependent pointer chasing through a private 16 MiB cycle |
 
-Each test auto-calibrates its iteration count until it runs long enough to be
-timed reliably, then reports the best of several runs (the run least disturbed
-by the OS scheduler). Every kernel returns a checksum that the driver verifies
-across runs, so a miscompiled or non-deterministic kernel is caught rather than
-silently mis-scored.
+The benchmark increases each test's iteration count until one run takes at
+least two seconds. It then keeps the fastest of three runs. Each kernel returns
+a checksum, and fossbench stops if repeated runs produce different results.
 
-## Scoring
+During the multicore pass, every thread gets its own mutable workspace. This
+keeps the kernels free of data races and prevents shared scratch buffers from
+distorting the result.
 
-Each test's raw rate is normalised against a **reference machine** into a
-unitless score, and the overall is a **weighted geometric mean** of those
-scores:
+## Build and run
 
-```
-S_i     = TARGET * (rate_i / REF_i)                       (per-test score)
-Overall = TARGET * exp( Σ w_i·ln(rate_i/REF_i) / Σ w_i )  (weighted geo. mean)
-```
-
-The reference rates are the tuning machine's own rates, and `TARGET` is 20000,
-so that machine scores ~20000 on every test and overall. Scaling is linear in
-performance: a machine half as fast scores ~10000, one 10× slower ~2000, and a
-future machine twice as fast ~40000 — so there is unbounded room both below and
-above the reference.
-
-The weights reflect each test's influence on **everyday, common-workload user
-experience** — integer/general-purpose throughput and memory-latency-bound
-responsiveness matter most; specialised floating-point and physics matter
-least. This mirrors the weighted, integer-dominant approach of mainstream
-suites such as Geekbench 6 (which splits integer/FP roughly 65/35 and combines
-real-world workloads with a weighted mean).
-
-| Test | Weight |
-|---|---:|
-| Integer Math          | 20% |
-| Single-Threaded       | 16% |
-| Compression           | 14% |
-| Sorting               | 12% |
-| Extended Instructions | 11% |
-| Floating Point        |  9% |
-| Encryption            |  8% |
-| Prime Numbers         |  6% |
-| Physics               |  4% |
-
-Everything above is configurable via `#define`s at the top of `src/main.c`:
-`FM_TARGET_SCORE`, the nine `FM_REF_*` reference rates, and the nine
-`FM_WEIGHT_*` weights. Weights are relative — the code normalises by their sum,
-so you can change one without rebalancing the rest. To re-baseline for a
-different reference machine, set each `FM_REF_*` to that machine's measured
-rate.
-
-Note: the pointer-chase (Single-Threaded) test measures raw memory latency and
-is the noisiest to sample, so the overall typically varies ~1–2% run to run.
-
-## "Runs on all operating systems"
-
-The **assembly is** OS-independent: `src/fossmark.S` contains no system calls,
-no libc calls, and no external relocations. Every routine is a pure function of
-its arguments under the AAPCS64 calling convention, so the same source
-assembles and runs correctly on Linux (ELF), macOS (Mach-O), Windows (COFF) and
-the BSDs. It avoids `x18` (reserved on Darwin/Windows) and the `v8`–`v15`
-callee-saved vector bank.
-
-A single *binary* that runs everywhere is not possible — Linux, macOS and
-Windows use incompatible executable formats and system-call ABIs. So the
-portable C driver (`src/main.c`) supplies the per-OS parts (timing, memory,
-I/O), and you build one binary per platform. The Linux build is named
-`fossmark-linux-arm64`.
-
-## Build
+You need a C compiler, GNU Make, pthreads, and the system math library.
 
 ```sh
-make            # builds dist/fossmark-<os>-<arch> for the host
+make
+make bench
+```
+
+`make` builds a binary for the host at
+`dist/fossmark-<os>-<arch>`. `make bench` builds that binary and runs it.
+
+Other targets are available for explicit platforms and architectures:
+
+```sh
 make linux-arm64
 make linux-amd64
 make macos-arm64
 make macos-amd64
-make bench      # build and run the benchmark
-make test       # build and run the kernel correctness tests
+make all
 ```
 
-Both macOS targets can be built on either Apple Silicon or Intel Macs; Apple
-Clang selects the requested architecture with `-arch`. They produce
-`dist/fossmark-macos-arm64` and `dist/fossmark-macos-amd64`, respectively.
-
-Or by hand:
+`make all` builds both Linux targets. Cross-compilation requires a suitable
+toolchain. Override the target compiler when its name differs from the default:
 
 ```sh
-cc -O2 src/main.c src/fossmark.S -o dist/fossmark-linux-arm64 -lm
+make linux-arm64 CC_ARM64=aarch64-linux-gnu-gcc
+make linux-amd64 CC_AMD64=x86_64-linux-gnu-gcc
 ```
 
-On macOS the same command produces a native binary (name it
-`fossmark-macos-arm64`); on Windows use `clang` from the LLVM/MSVC toolchain.
+Apple Clang can build either macOS architecture with `-arch`. Windows timing
+and allocation code exists in the driver, but the Makefile does not include a
+Windows target and the x86-64 assembly currently follows the System V ABI.
 
-## Testing
+Run the benchmark with extra per-test details by passing `--verbose`:
 
-`src/test_kernels.c` is a standalone harness that validates each kernel against
-an independent reference or invariant — the sieve against a C reference sieve,
-the NEON ChaCha20 against a scalar reference anchored to the RFC 8439
-known-answer vector, the sort against `qsort`, the N-body step against
-conservation of momentum, and so on. It exits non-zero if any check fails.
+```sh
+./dist/fossmark-linux-amd64 --verbose
+```
+
+The exact filename depends on the host platform and architecture.
+
+## Scores
+
+Each workload receives a score relative to a reference rate:
+
+```text
+test score = 10000 * measured rate / reference rate
+```
+
+The single-core and multicore totals are weighted geometric means of the nine
+test scores. Both passes use the same reference rates and weights, so their
+ratio gives a direct view of scaling across the machine's available cores.
+
+| Test | Weight |
+|---|---:|
+| Integer math | 20% |
+| Memory latency | 16% |
+| Compression | 14% |
+| Sorting | 12% |
+| Extended instructions | 11% |
+| Floating point math | 9% |
+| Encryption | 8% |
+| Prime numbers | 6% |
+| Physics | 4% |
+
+The reference rates, weights, target score, workload sizes, calibration floor,
+and repeat count are compile-time constants in `src/main.c`. Changing them
+creates a different benchmark profile, so scores from that build should not be
+compared with scores from the default build.
+
+Memory latency is displayed as nanoseconds per access, but its score uses the
+underlying pointer-chase throughput. Latency results are sensitive to memory
+placement and operating-system activity, so some variation between runs is
+normal.
+
+## Architecture support
+
+The assembly kernels use only baseline instructions for their architecture:
+
+* `src/fossmark.S` uses ARMv8-A and NEON under AAPCS64.
+* `src/fossmark_x86_64.S` uses baseline x86-64 and SSE2 under the System V ABI.
+
+The kernel files contain no system calls or calls into the C library. The same
+ARM64 source can be assembled for Linux, macOS, Windows, and BSD object formats.
+The current x86-64 source supports Linux, macOS, and the BSDs that use the
+System V calling convention.
+
+One binary cannot run on every supported target because operating systems and
+architectures use different executable formats and instruction sets. Build a
+separate binary for each operating system and architecture pair.
+
+## Tests
+
+The correctness suite checks all nine kernels against C reference
+implementations, known answers, or invariants. Most checks also run concurrently
+on every available core to catch shared-state and reentrancy bugs.
 
 ```sh
 make test
 ```
+
+The suite covers the RFC 8439 ChaCha20 test vector, prime counts, sorting output,
+physics momentum, pointer-chase behavior, and deterministic results. It exits
+with a nonzero status if any check fails.
+
+## Source layout
+
+```text
+src/main.c              portable benchmark driver and scoring
+src/fossmark.S          ARM64 kernels
+src/fossmark_x86_64.S   x86-64 kernels
+src/test_kernels.c      correctness suite
+Makefile                native and cross-build targets
+dist/                   generated binaries
+```
+
+## License
+
+No license file is included in this repository yet. Add one before distributing
+fossbench or accepting outside contributions as an open-source project.
