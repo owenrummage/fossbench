@@ -44,6 +44,7 @@ DRIVER    := src/main.c
 ASM_ARM64 := src/fossmark.S
 ASM_AMD64 := src/fossmark_x86_64.S
 SRC_PPC32 := src/fossmark_ppc32.c
+ASM_PPC32 := src/fossmark_ppc32_ext.S
 
 # ---- host detection: normalise `uname -m` to our arch names ----
 HOST_ARCH := $(shell uname -m)
@@ -55,7 +56,7 @@ else ifneq (,$(filter x86_64 amd64,$(HOST_ARCH)))
 	HOST_KERNEL   := $(ASM_AMD64)
 else ifneq (,$(filter ppc powerpc ppc32 powerpc32,$(HOST_ARCH)))
 	HOST_ARCHNAME := ppc32be
-	HOST_KERNEL   := $(SRC_PPC32)
+	HOST_KERNEL   := $(SRC_PPC32) $(ASM_PPC32)
 else
 	HOST_ARCHNAME := $(HOST_ARCH)
 	$(error unsupported host architecture '$(HOST_ARCH)')
@@ -121,8 +122,8 @@ $(DIST)/fossmark-linux-amd64: $(DRIVER) $(ASM_AMD64) | $(DIST)
 	$(CC_AMD64) $(CFLAGS) $(PTHREAD) -o $@ $(DRIVER) $(ASM_AMD64) $(LDLIBS)
 	@echo "built $@"
 
-$(DIST)/fossmark-linux-ppc32be: $(DRIVER) $(SRC_PPC32) | $(DIST)
-	$(CC_PPC32BE) $(CFLAGS) $(PTHREAD) -o $@ $(DRIVER) $(SRC_PPC32) $(LDLIBS)
+$(DIST)/fossmark-linux-ppc32be: $(DRIVER) $(SRC_PPC32) $(ASM_PPC32) | $(DIST)
+	$(CC_PPC32BE) $(CFLAGS) $(PTHREAD) -o $@ $(DRIVER) $(SRC_PPC32) $(ASM_PPC32) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossmark-macos-arm64: $(DRIVER) $(ASM_ARM64) | $(DIST)

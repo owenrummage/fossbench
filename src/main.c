@@ -22,6 +22,24 @@
 #include <math.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <ctype.h>
+#include <errno.h>
+
+#if !defined(_WIN32)
+#  include <sys/socket.h>
+#  include <sys/utsname.h>
+#  include <netdb.h>
+#endif
+#if defined(__APPLE__)
+#  include <sys/types.h>
+#  include <sys/sysctl.h>
+#endif
+
+/* Change this at build time with -DFM_API_BASE_URL=\"http://host:port\". */
+#ifndef FM_API_BASE_URL
+#  define FM_API_BASE_URL "http://localhost:8080"
+#endif
+#define FM_VERSION "0.1.2"
 
 /* ---------- platform identification (for the banner only) ---------- */
 
@@ -49,7 +67,7 @@
 #  define FM_ARCH "PowerPC 32-bit big-endian"
 #  define D_INT  "PPC32 integer ALU and software 64-bit arithmetic"
 #  define D_FP   "PowerPC scalar double-precision floating point"
-#  define D_SIMD "PPC32 parallel integer workload"
+#  define D_SIMD "runtime-selected PS, VSX, AltiVec, or scalar"
 #else
 #  define FM_ARCH "unknown"
 #  define D_INT  "64-bit integer ALU"
@@ -101,7 +119,16 @@ extern uint64_t fm_chase(void **ptrs, uint64_t steps);
 #define SIMD_BUF	256			/* NEON scratch            */
 #define NBODY_N		512			/* bodies                  */
 #define SORT_N		(1u << 20)		/* elements to sort        */
-#define CHASE_NODES	(1u << 21)		/* 16 MiB cycle, > any L2  */
+/* PPC32 Wii Linux systems have less than 32 MiB available to a process.
+ * A 2 MiB chase remains well beyond the 750CL's 256 KiB L2 while keeping the
+ * complete benchmark (including setup's temporary permutation) below 32 MiB. */
+#if defined(__powerpc__) && !defined(__powerpc64__)
+#  define CHASE_NODES	(1u << 19)		/* 2 MiB with 32-bit pointers */
+#  define CHASE_DETAIL	"dependent-load pointer chase, 2 MiB"
+#else
+#  define CHASE_NODES	(1u << 21)		/* 16 MiB cycle, > any L2 */
+#  define CHASE_DETAIL	"dependent-load pointer chase, 16 MiB"
+#endif
 
 #define MIN_SECONDS	2.0			/* per-test measured floor */
 #define REPEATS		3			/* best-of, to reject noise */
@@ -225,6 +252,106 @@ static uint8_t  *g_cipher_src;	/* pristine plaintext, copied per-core   */
 static uint8_t  *g_simd_src;	/* pristine NEON seed, copied per-core   */
 static double   *g_bodies_src;	/* pristine initial conditions           */
 static uint32_t *g_sort_src;	/* pristine unsorted data                */
+
+struct system_info {
+	char cpu[256];
+	char operating_system[256];
+	char compiler[128];
+	long cpu_cores;
+	long cpu_threads;
+	long memory_mb;
+};
+
+static void trim(char *s)
+{
+	char *p = s;
+	size_t n;
+	while (isspace((unsigned char)*p)) p++;
+	if (p != s) memmove(s, p, strlen(p) + 1);
+	n = strlen(s);
+	while (n && isspace((unsigned char)s[n - 1])) s[--n] = '\0';
+}
+
+static void detect_system_info(struct system_info *info)
+{
+	memset(info, 0, sizeof(*info));
+	info->cpu_threads = g_ncores;
+	info->cpu_cores = g_ncores;
+	strncpy(info->cpu, FM_ARCH, sizeof(info->cpu) - 1);
+	strncpy(info->operating_system, FM_OS, sizeof(info->operating_system) - 1);
+#if defined(__clang__)
+	snprintf(info->compiler, sizeof(info->compiler), "Clang %s", __clang_version__);
+#elif defined(__GNUC__)
+	snprintf(info->compiler, sizeof(info->compiler), "GCC %s", __VERSION__);
+#elif defined(_MSC_VER)
+	snprintf(info->compiler, sizeof(info->compiler), "MSVC %d", _MSC_VER);
+#else
+	strncpy(info->compiler, "Unknown", sizeof(info->compiler) - 1);
+#endif
+
+#if defined(__linux__)
+	{
+		FILE *f = fopen("/proc/cpuinfo", "r");
+		char line[512];
+		int pairs[1024][2], npairs = 0, physical = -1, core = -1;
+		if (f) {
+			while (fgets(line, sizeof(line), f)) {
+				char *colon = strchr(line, ':');
+				if (!colon) continue;
+				*colon++ = '\0'; trim(line); trim(colon);
+				if ((!strcmp(line, "model name") || !strcmp(line, "Processor") ||
+				     !strcmp(line, "cpu")) && info->cpu[0] && !strcmp(info->cpu, FM_ARCH))
+					strncpy(info->cpu, colon, sizeof(info->cpu) - 1);
+				else if (!strcmp(line, "physical id")) physical = atoi(colon);
+				else if (!strcmp(line, "core id")) core = atoi(colon);
+				if (physical >= 0 && core >= 0) {
+					int i, seen = 0;
+					for (i = 0; i < npairs; i++)
+						if (pairs[i][0] == physical && pairs[i][1] == core) seen = 1;
+					if (!seen && npairs < 1024) { pairs[npairs][0] = physical; pairs[npairs++][1] = core; }
+					physical = core = -1;
+				}
+			}
+			fclose(f);
+			if (npairs > 0) info->cpu_cores = npairs;
+		}
+	}
+	{
+		FILE *f = fopen("/proc/meminfo", "r");
+		char line[256]; long kb;
+		if (f) {
+			while (fgets(line, sizeof(line), f)) {
+				if (sscanf(line, "MemTotal: %ld kB", &kb) == 1) {
+					info->memory_mb = kb / 1024;
+					break;
+				}
+			}
+			fclose(f);
+		}
+	}
+	{
+		FILE *f = fopen("/etc/os-release", "r"); char line[512];
+		if (f) { while (fgets(line, sizeof(line), f)) if (!strncmp(line, "PRETTY_NAME=", 12)) {
+			char *v = line + 12; trim(v);
+			if (v[0] == '\"') { memmove(v, v + 1, strlen(v)); if (strlen(v) && v[strlen(v)-1] == '\"') v[strlen(v)-1] = '\0'; }
+			snprintf(info->operating_system, sizeof(info->operating_system), "%s", v); break;
+		} fclose(f); }
+	}
+#elif defined(__APPLE__)
+	{
+		size_t n = sizeof(info->cpu); uint64_t mem = 0; size_t mn = sizeof(mem);
+		int cores = 0; size_t cn = sizeof(cores);
+		if (sysctlbyname("machdep.cpu.brand_string", info->cpu, &n, NULL, 0) != 0)
+			sysctlbyname("hw.model", info->cpu, &n, NULL, 0);
+		if (sysctlbyname("hw.physicalcpu", &cores, &cn, NULL, 0) == 0) info->cpu_cores = cores;
+		if (sysctlbyname("hw.memsize", &mem, &mn, NULL, 0) == 0) info->memory_mb = (long)(mem / 1024 / 1024);
+	}
+	{
+		struct utsname u; if (uname(&u) == 0)
+			snprintf(info->operating_system, sizeof(info->operating_system), "macOS %s", u.release);
+	}
+#endif
+}
 
 /*
  * Synthesise a compressible corpus. Random bytes would be incompressible and
@@ -392,6 +519,9 @@ static uint64_t run_primes(uint64_t n, struct workspace *ws)
 }
 static uint64_t run_simd(uint64_t n, struct workspace *ws)
 {
+	/* The kernel is allowed to use its scratch as an accumulator. Restore it
+	 * before every timed run so calibration and repeats see identical input. */
+	memcpy(ws->simd_buf, g_simd_src, SIMD_BUF);
 	return fm_simd(n * 100000, ws->simd_buf);
 }
 static uint64_t run_compress(uint64_t n, struct workspace *ws)
@@ -453,7 +583,7 @@ static const struct test tests[] = {
 	{ "Sorting",              "heapsort, 1M uint32",
 	  run_sort,      1, (double)SORT_N * 20,  "Mkey-cmp/s",
 	  FM_REF_SORT,     FM_WEIGHT_SORT },
-	{ "Memory Latency",       "dependent-load pointer chase, 16 MiB",
+	{ "Memory Latency",       CHASE_DETAIL,
 	  run_chase,     1, 1000000.0,      "ns/access",
 	  FM_REF_CHASE,    FM_WEIGHT_CHASE },
 };
@@ -603,16 +733,116 @@ static double display_metric(const struct test *t, const struct result *r)
 	return r->rate;
 }
 
+/* ---------- optional result upload ---------- */
+
+static void json_escape(const char *src, char *dst, size_t cap)
+{
+	size_t used = 0;
+	while (*src && used + 1 < cap) {
+		unsigned char c = (unsigned char)*src++;
+		const char *esc = NULL;
+		if (c == '\"') esc = "\\\"";
+		else if (c == '\\') esc = "\\\\";
+		else if (c == '\n') esc = "\\n";
+		else if (c == '\r') esc = "\\r";
+		else if (c == '\t') esc = "\\t";
+		if (esc) {
+			size_t n = strlen(esc); if (used + n >= cap) break;
+			memcpy(dst + used, esc, n); used += n;
+		} else if (c >= 0x20) dst[used++] = (char)c;
+	}
+	dst[used] = '\0';
+}
+
+#if !defined(_WIN32)
+static int upload_results(const struct system_info *info, double score,
+			  uint64_t duration_ms, const char *token)
+{
+	char host[256], port[16] = "80", path[512], payload[2048], request[4096];
+	char cpu[512], os[512], compiler[256], response[512];
+	const char *base = FM_API_BASE_URL, *p, *slash, *colon;
+	struct addrinfo hints, *addresses = NULL, *a;
+	int fd = -1, status = 0, payload_len, request_len;
+
+	if (strncmp(base, "http://", 7) != 0) {
+		fprintf(stderr, "  upload error: FM_API_BASE_URL must use http://\n");
+		return 0;
+	}
+	p = base + 7; slash = strchr(p, '/');
+	if (!slash) slash = p + strlen(p);
+	colon = memchr(p, ':', (size_t)(slash - p));
+	if (colon) {
+		size_t hn = (size_t)(colon - p), pn = (size_t)(slash - colon - 1);
+		if (hn >= sizeof(host) || pn == 0 || pn >= sizeof(port)) return 0;
+		memcpy(host, p, hn); host[hn] = '\0'; memcpy(port, colon + 1, pn); port[pn] = '\0';
+	} else {
+		size_t hn = (size_t)(slash - p); if (hn >= sizeof(host)) return 0;
+		memcpy(host, p, hn); host[hn] = '\0';
+	}
+	{
+		int base_path_len = (int)strlen(slash);
+		while (base_path_len > 0 && slash[base_path_len - 1] == '/') base_path_len--;
+		snprintf(path, sizeof(path), "%.*s/api/v1/submissions", base_path_len, slash);
+	}
+
+	json_escape(info->cpu, cpu, sizeof(cpu));
+	json_escape(info->operating_system, os, sizeof(os));
+	json_escape(info->compiler, compiler, sizeof(compiler));
+	payload_len = snprintf(payload, sizeof(payload),
+		"{\"cpu\":\"%s\",\"cpu_cores\":%ld,\"cpu_threads\":%ld,"
+		"\"memory_mb\":%ld,\"operating_system\":\"%s\",\"compiler\":\"%s\","
+		"\"fossmark_version\":\"%s\",\"score\":%.2f,\"duration_ms\":%llu}",
+		cpu, info->cpu_cores, info->cpu_threads, info->memory_mb, os, compiler,
+		FM_VERSION, score, (unsigned long long)duration_ms);
+	if (payload_len < 0 || (size_t)payload_len >= sizeof(payload)) return 0;
+	request_len = snprintf(request, sizeof(request),
+		"POST %s HTTP/1.1\r\nHost: %s:%s\r\nContent-Type: application/json\r\n"
+		"Authorization: Bearer %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
+		path, host, port, token, payload_len, payload);
+	if (request_len < 0 || (size_t)request_len >= sizeof(request)) return 0;
+
+	memset(&hints, 0, sizeof(hints)); hints.ai_socktype = SOCK_STREAM; hints.ai_family = AF_UNSPEC;
+	if (getaddrinfo(host, port, &hints, &addresses) != 0) { fprintf(stderr, "  upload error: cannot resolve %s\n", host); return 0; }
+	for (a = addresses; a; a = a->ai_next) {
+		fd = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
+		if (fd >= 0 && connect(fd, a->ai_addr, a->ai_addrlen) == 0) break;
+		if (fd >= 0) close(fd);
+		fd = -1;
+	}
+	freeaddrinfo(addresses);
+	if (fd < 0) { fprintf(stderr, "  upload error: cannot connect to %s:%s\n", host, port); return 0; }
+	{
+		size_t sent = 0;
+		while (sent < (size_t)request_len) {
+			ssize_t n = send(fd, request + sent, (size_t)request_len - sent, 0);
+			if (n <= 0) { close(fd); fprintf(stderr, "  upload error: send failed\n"); return 0; }
+			sent += (size_t)n;
+		}
+	}
+	{
+		ssize_t n = recv(fd, response, sizeof(response) - 1, 0); close(fd);
+		if (n <= 0) { fprintf(stderr, "  upload error: no server response\n"); return 0; }
+		response[n] = '\0';
+		if (sscanf(response, "HTTP/%*s %d", &status) != 1) status = 0;
+	}
+	if (status < 200 || status >= 300) { fprintf(stderr, "  upload failed: server returned HTTP %d\n", status); return 0; }
+	printf("  Results uploaded successfully (HTTP %d).\n", status);
+	return 1;
+}
+#endif
+
 /* ---------- output ---------- */
 
-static void print_header(void)
+static void print_header(const struct system_info *info)
 {
 	printf("\n");
-	printf("  fossbench1.0 - multi-core CPU benchmark\n");
+	printf("  fossbench %s - multi-core CPU benchmark\n", FM_VERSION);
 	printf("  ------------------------------------------------------------------\n");
-	printf("  platform: %s/%s\n", FM_OS, FM_ARCH);
-	printf("  cores:    %ld\n",
-	       g_ncores, g_ncores);
+	printf("  CPU:       %s\n", info->cpu);
+	printf("  cores:     %ld physical / %ld threads\n", info->cpu_cores, info->cpu_threads);
+	printf("  memory:    %ld MB\n", info->memory_mb);
+	printf("  OS:        %s (%s)\n", info->operating_system, FM_ARCH);
+	printf("  compiler:  %s\n", info->compiler);
 	printf("\n");
 	printf("  %-24s %12s  %-11s %8s %9s\n",
 	       "TEST", "RATE", "UNIT", "TIME", "SCORE");
@@ -623,8 +853,11 @@ static void print_header(void)
 int main(int argc, char **argv)
 {
 	struct result multi[NTESTS], single[NTESTS];
+	struct system_info system_info;
 	double multi_log_sum = 0.0, single_log_sum = 0.0;
 	double weight_sum = 0.0;
+	double benchmark_started, multicore_score, singlecore_score;
+	uint64_t duration_ms;
 	int verbose = 0;
 	size_t i;
 
@@ -647,13 +880,15 @@ int main(int argc, char **argv)
 		long n = sysconf(_SC_NPROCESSORS_ONLN);
 		g_ncores = n > 0 ? n : 1;
 	}
+	detect_system_info(&system_info);
+	benchmark_started = now_seconds();
 
 	printf("\n  preparing workloads...");
 	fflush(stdout);
 	setup();
 	printf(" done\n");
 
-	print_header();
+	print_header(&system_info);
 
 	for (i = 0; i < NTESTS; i++) {
 		double sm, ss;
@@ -699,12 +934,35 @@ int main(int argc, char **argv)
 	 * The two passes share tests and weights, so MULTICORE / SINGLECORE is a
 	 * clean read of how much the machine gains from all its cores.
 	 */
-	printf("  %-24s %44.0f\n", "MULTICORE SCORE",
-	       exp(multi_log_sum / weight_sum));
-	printf("  %-24s %44.0f\n", "SINGLECORE SCORE",
-	       exp(single_log_sum / weight_sum));
+	multicore_score = exp(multi_log_sum / weight_sum);
+	singlecore_score = exp(single_log_sum / weight_sum);
+	duration_ms = (uint64_t)((now_seconds() - benchmark_started) * 1000.0);
+	printf("  %-24s %44.0f\n", "MULTICORE SCORE", multicore_score);
+	printf("  %-24s %44.0f\n", "SINGLECORE SCORE", singlecore_score);
+	printf("  %-24s %41.2fs\n", "TOTAL DURATION", (double)duration_ms / 1000.0);
 	printf("\n");
 
 	teardown();
+
+	{
+		char answer[16];
+		printf("  Upload this result to %s? [y/N] ", FM_API_BASE_URL);
+		fflush(stdout);
+		if (fgets(answer, sizeof(answer), stdin) &&
+		    (answer[0] == 'y' || answer[0] == 'Y')) {
+			const char *token = getenv("FOSSMARK_API_TOKEN");
+			if (!token || !*token) {
+				fprintf(stderr, "  Upload skipped: set FOSSMARK_API_TOKEN to your API token.\n");
+			} else {
+#if defined(_WIN32)
+				fprintf(stderr, "  Upload is not yet supported on Windows.\n");
+#else
+				upload_results(&system_info, multicore_score, duration_ms, token);
+#endif
+			}
+		} else {
+			printf("  Result was not uploaded.\n");
+		}
+	}
 	return 0;
 }

@@ -22,7 +22,7 @@ architecture-specific backend files.
 | Encryption | ChaCha20 with 20 rounds over a 1 MiB buffer |
 | Physics | Direct-sum gravity for 512 bodies |
 | Sorting | In-place heapsort of one million 32-bit integers |
-| Memory latency | Dependent pointer chasing through a private 16 MiB cycle |
+| Memory latency | Dependent pointer chasing through a private cache-exceeding cycle |
 
 The benchmark increases each test's iteration count until one run takes at
 least two seconds. It then keeps the fastest of three runs. Each kernel returns
@@ -76,6 +76,27 @@ Run the benchmark with extra per-test details by passing `--verbose`:
 
 The exact filename depends on the host platform and architecture.
 
+At startup, fossmark reports the detected CPU model, physical cores, logical
+threads, installed memory, operating system, architecture, and compiler. At the
+end it prints the composite scores and total benchmark duration, then asks
+whether to upload the result. Uploading is opt-in and requires an API token in
+the environment:
+
+```sh
+FOSSMARK_API_TOKEN=your_token ./dist/fossmark-linux-amd64
+```
+
+The API base URL is defined by `FM_API_BASE_URL` in `src/main.c` and defaults to
+`http://localhost:8080`. A release build can override it without editing the
+source:
+
+```sh
+make CFLAGS='-O2 -Wall -Wextra -DFM_API_BASE_URL=\"http://bench.example.com\"'
+```
+
+The built-in uploader currently supports plain HTTP. An HTTPS production URL
+will require TLS support (or submission through a TLS-terminating local proxy).
+
 ## Continuous integration and releases
 
 Pushing a Git tag runs the GitHub Actions build and correctness tests. If they
@@ -123,7 +144,15 @@ The kernel backends use only baseline instructions for their architecture:
 
 * `src/fossmark.S` uses ARMv8-A and NEON under AAPCS64.
 * `src/fossmark_x86_64.S` uses baseline x86-64 and SSE2 under the System V ABI.
-* `src/fossmark_ppc32.c` is endian-safe and uses baseline 32-bit PowerPC operations. It avoids AltiVec so it runs on the Wii's PowerPC 750CL-class CPU.
+* `src/fossmark_ppc32.c` is endian-safe and keeps a baseline 32-bit PowerPC
+  fallback. At runtime, the extended-instruction test uses Paired Singles when
+  the device-tree `compatible` property begins with `nintendo,`; otherwise it
+  selects VSX, AltiVec, or the scalar fallback in that order according to
+  Linux `AT_HWCAP`.
+
+The PPC32 build uses a 2 MiB pointer-chase cycle, which exceeds the 750CL's L2
+cache while keeping peak benchmark memory consumption below 32 MiB. Other
+architectures retain the default 16 MiB cycle.
 
 The assembly kernel files contain no system calls or calls into the C library.
 The same ARM64 source can be assembled for Linux, macOS, Windows, and BSD object formats.
@@ -155,6 +184,7 @@ src/main.c              portable benchmark driver and scoring
 src/fossmark.S          ARM64 kernels
 src/fossmark_x86_64.S   x86-64 kernels
 src/fossmark_ppc32.c    PPC32 big-endian kernels
+src/fossmark_ppc32_ext.S optional PPC32 PS, VSX, and AltiVec kernels
 src/test_kernels.c      correctness suite
 Makefile                native and cross-build targets
 dist/                   generated binaries

@@ -8,7 +8,12 @@
 #include <math.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
+
+#if defined(__linux__)
+#include <sys/auxv.h>
+#endif
 
 static uint32_t rotl32(uint32_t x, unsigned n)
 {
@@ -59,7 +64,7 @@ uint64_t fm_primes(uint64_t limit, uint8_t *sieve)
 	return count;
 }
 
-uint64_t fm_simd(uint64_t iters, void *memory)
+static uint64_t fm_simd_scalar(uint64_t iters, void *memory)
 {
 	uint32_t *v = (uint32_t *)memory;
 	uint32_t a[8]; uint64_t i; unsigned j; uint32_t sum = 0;
@@ -69,6 +74,89 @@ uint64_t fm_simd(uint64_t iters, void *memory)
 		for (j = 0; j < 8; j++) a[j] = rotl32(a[j] + a[(j + 1) & 7] * (j + 3), (j + 5) & 31);
 	for (j = 0; j < 8; j++) sum ^= a[j];
 	memcpy(v, a, sizeof a);
+	return sum;
+}
+
+/* These are kept in fossmark_ppc32_ext.S so this translation unit, and thus
+ * the executable's default code path, only requires baseline PPC32. */
+extern void fm_simd_ps_kernel(uint64_t iters, void *memory);
+extern void fm_simd_vsx_kernel(uint64_t iters, void *memory);
+extern void fm_simd_altivec_kernel(uint64_t iters, void *memory);
+
+typedef void (*fm_simd_kernel)(uint64_t, void *);
+
+static int device_is_nintendo(void)
+{
+#if defined(__linux__)
+	static const char prefix[] = "nintendo,";
+	static const char *const paths[] = {
+		"/proc/device-tree/compatible",
+		"/sys/firmware/devicetree/base/compatible"
+	};
+	char compatible[sizeof prefix - 1];
+	unsigned i;
+
+	for (i = 0; i < sizeof paths / sizeof paths[0]; i++) {
+		FILE *fp = fopen(paths[i], "rb");
+		int match;
+		if (fp == NULL)
+			continue;
+		match = fread(compatible, 1, sizeof compatible, fp) == sizeof compatible &&
+			memcmp(compatible, prefix, sizeof compatible) == 0;
+		fclose(fp);
+		return match;
+	}
+	return 0;
+#else
+	return 0;
+#endif
+}
+
+static fm_simd_kernel detect_simd_kernel(void)
+{
+	/* Linux exposes these in AT_HWCAP on both 32- and 64-bit PowerPC.
+	 * Spell out the ABI values instead of depending on kernel-only headers. */
+#if defined(__linux__) && defined(AT_HWCAP)
+	const unsigned long hwcap = getauxval(AT_HWCAP);
+	const unsigned long has_altivec = 0x10000000UL;
+	const unsigned long has_vsx = 0x00000080UL;
+
+	if (device_is_nintendo())
+		return fm_simd_ps_kernel;
+	if (hwcap & has_vsx)
+		return fm_simd_vsx_kernel;
+	if (hwcap & has_altivec)
+		return fm_simd_altivec_kernel;
+#else
+	if (device_is_nintendo())
+		return fm_simd_ps_kernel;
+#endif
+	return NULL;
+}
+
+uint64_t fm_simd(uint64_t iters, void *memory)
+{
+	static fm_simd_kernel kernel;
+	static int detected;
+	fm_simd_kernel selected;
+	uint32_t *v = (uint32_t *)memory;
+	uint32_t sum = 0;
+	unsigned j;
+
+	if (!iters)
+		return 0;
+	if (!__atomic_load_n(&detected, __ATOMIC_ACQUIRE)) {
+		fm_simd_kernel found = detect_simd_kernel();
+		__atomic_store_n(&kernel, found, __ATOMIC_RELAXED);
+		__atomic_store_n(&detected, 1, __ATOMIC_RELEASE);
+	}
+	selected = __atomic_load_n(&kernel, __ATOMIC_RELAXED);
+	if (selected == NULL)
+		return fm_simd_scalar(iters, memory);
+
+	selected(iters, memory);
+	for (j = 0; j < 8; j++)
+		sum ^= v[j];
 	return sum;
 }
 
