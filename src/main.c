@@ -65,7 +65,12 @@
 #  define D_INT  "64-bit ALU: imul, mul, div, bitops"
 #  define D_FP   "double: mulsd/addsd, divsd, sqrtsd"
 #  define D_SIMD "SSE2: 128-bit integer + float"
-#elif defined(__powerpc__) && !defined(__powerpc64__)
+#elif defined(__powerpc64__)
+#  define FM_ARCH "PowerPC 64-bit big-endian"
+#  define D_INT  "64-bit PowerPC integer ALU"
+#  define D_FP   "PowerPC scalar double-precision floating point"
+#  define D_SIMD "AltiVec: 128-bit integer vectors (PowerPC 970)"
+#elif defined(__powerpc__)
 #  define FM_ARCH "PowerPC 32-bit big-endian"
 #  define D_INT  "PPC32 integer ALU and software 64-bit arithmetic"
 #  define D_FP   "PowerPC scalar double-precision floating point"

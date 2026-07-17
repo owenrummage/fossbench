@@ -4,6 +4,7 @@
 #   src/fossmark.S         AArch64 (ARM64)
 #   src/fossmark_x86_64.S  x86-64  (AMD64)
 #   src/fossmark_ppc32.c   PowerPC 32-bit, including big-endian systems
+#                          and the portable PPC64 kernel implementations
 # The C driver (src/main.c) is portable across architectures and OSes. A
 # "binary that runs everywhere" is not possible - each OS/arch pair uses a
 # different executable format and instruction set - so output is named per
@@ -13,6 +14,7 @@
 #   make               build for the host arch (dist/fossmark-<os>-<arch>)
 #   make linux-arm64   build the Linux/ARM64  binary
 #   make linux-amd64   build the Linux/AMD64  binary
+#   make linux-ppc64be build Linux/PPC64 big-endian for an iMac G5
 #   make macos-arm64   build the macOS/ARM64  binary
 #   make macos-amd64   build the macOS/AMD64  binary
 #   make all           build both Linux binaries
@@ -27,6 +29,7 @@
 # toolchain is named differently, e.g.:
 #   make linux-amd64 CC_AMD64=x86_64-linux-gnu-gcc-14
 #   make linux-arm64 CC_ARM64="clang --target=aarch64-linux-gnu"
+#   make linux-ppc64be CC_PPC64BE=powerpc64-linux-gnu-gcc
 #
 # On macOS, Apple Clang can build both architectures. The macOS compiler may
 # be overridden for an osxcross or other cross toolchain:
@@ -47,6 +50,7 @@ ASM_ARM64 := src/fossmark.S
 ASM_AMD64 := src/fossmark_x86_64.S
 SRC_PPC32 := src/fossmark_ppc32.c
 ASM_PPC32 := src/fossmark_ppc32_ext.S
+SRC_PPC64 := src/fossmark_ppc32.c
 
 # ---- host detection: normalise `uname -m` to our arch names ----
 HOST_ARCH := $(shell uname -m)
@@ -59,9 +63,15 @@ else ifneq (,$(filter x86_64 amd64,$(HOST_ARCH)))
 else ifneq (,$(filter ppc powerpc ppc32 powerpc32,$(HOST_ARCH)))
 	HOST_ARCHNAME := ppc32be
 	HOST_KERNEL   := $(SRC_PPC32) $(ASM_PPC32)
+else ifneq (,$(filter ppc64 powerpc64,$(HOST_ARCH)))
+	HOST_ARCHNAME := ppc64be
+	HOST_KERNEL   := $(SRC_PPC64)
 else
 	HOST_ARCHNAME := $(HOST_ARCH)
 	$(error unsupported host architecture '$(HOST_ARCH)')
+endif
+ifeq ($(HOST_ARCHNAME),ppc64be)
+	CFLAGS += -mcpu=970 -maltivec
 endif
 ifeq ($(HOST_ARCHNAME),arm64)
 	HOST_KERNEL := $(ASM_ARM64)
@@ -97,15 +107,20 @@ ifeq ($(HOST_ARCHNAME),ppc32be)
 else
 	CC_PPC32BE ?= powerpc-linux-gnu-gcc
 endif
+ifeq ($(HOST_ARCHNAME),ppc64be)
+	CC_PPC64BE ?= $(CC)
+else
+	CC_PPC64BE ?= powerpc64-linux-gnu-gcc
+endif
 
 NATIVE_BIN := $(DIST)/fossmark-$(OSNAME)-$(HOST_ARCHNAME)
 
 # `make` with no target builds the host binary, as before.
 .DEFAULT_GOAL := native
-.PHONY: all native linux-arm64 linux-amd64 linux-ppc32be macos-arm64 macos-amd64 bench test clean
+.PHONY: all native linux-arm64 linux-amd64 linux-ppc32be linux-ppc64be macos-arm64 macos-amd64 bench test clean
 
 # `make all` builds all Linux binaries.
-all: linux-arm64 linux-amd64 linux-ppc32be
+all: linux-arm64 linux-amd64 linux-ppc32be linux-ppc64be
 
 # `make native` (and bare `make`) build for whatever host you are on.
 native: $(NATIVE_BIN)
@@ -113,6 +128,7 @@ native: $(NATIVE_BIN)
 linux-arm64: $(DIST)/fossmark-linux-arm64
 linux-amd64: $(DIST)/fossmark-linux-amd64
 linux-ppc32be: $(DIST)/fossmark-linux-ppc32be
+linux-ppc64be: $(DIST)/fossmark-linux-ppc64be
 macos-arm64: $(DIST)/fossmark-macos-arm64
 macos-amd64: $(DIST)/fossmark-macos-amd64
 
@@ -126,6 +142,10 @@ $(DIST)/fossmark-linux-amd64: $(DRIVER) $(ASM_AMD64) | $(DIST)
 
 $(DIST)/fossmark-linux-ppc32be: $(DRIVER) $(SRC_PPC32) $(ASM_PPC32) | $(DIST)
 	$(CC_PPC32BE) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(SRC_PPC32) $(ASM_PPC32) $(LDLIBS)
+	@echo "built $@"
+
+$(DIST)/fossmark-linux-ppc64be: $(DRIVER) $(SRC_PPC64) | $(DIST)
+	$(CC_PPC64BE) -mcpu=970 -maltivec $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(SRC_PPC64) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossmark-macos-arm64: $(DRIVER) $(ASM_ARM64) | $(DIST)
@@ -146,6 +166,9 @@ ifeq ($(OSNAME)-$(HOST_ARCHNAME),linux-amd64)
 NATIVE_HAS_RULE := yes
 endif
 ifeq ($(OSNAME)-$(HOST_ARCHNAME),linux-ppc32be)
+NATIVE_HAS_RULE := yes
+endif
+ifeq ($(OSNAME)-$(HOST_ARCHNAME),linux-ppc64be)
 NATIVE_HAS_RULE := yes
 endif
 ifeq ($(OSNAME)-$(HOST_ARCHNAME),macos-arm64)

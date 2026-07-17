@@ -1,8 +1,8 @@
 /*
- * Portable kernel backend for 32-bit PowerPC.
+ * Portable kernel backend for big-endian PowerPC.
  *
  * Keeping this backend in C lets the compiler implement 64-bit arguments and
- * returns according to the platform's PPC32 ABI.  All byte-oriented formats
+ * returns according to the platform ABI.  All byte-oriented formats
  * are decoded explicitly, so the code is correct on big-endian systems.
  */
 #include <math.h>
@@ -64,6 +64,7 @@ uint64_t fm_primes(uint64_t limit, uint8_t *sieve)
 	return count;
 }
 
+#if !defined(__powerpc64__)
 static uint64_t fm_simd_scalar(uint64_t iters, void *memory)
 {
 	uint32_t *v = (uint32_t *)memory;
@@ -76,7 +77,39 @@ static uint64_t fm_simd_scalar(uint64_t iters, void *memory)
 	memcpy(v, a, sizeof a);
 	return sum;
 }
+#endif
 
+#if defined(__powerpc64__)
+/* The PowerPC 970 in every iMac G5 implements AltiVec.  Using GCC's vector
+ * type here lets the compiler handle whichever PPC64 ELF ABI the system uses;
+ * both PPC64 ABIs differ from the PPC32 assembly convention below. */
+typedef uint32_t fm_vec_u32 __attribute__((vector_size(16)));
+
+uint64_t fm_simd(uint64_t iters, void *memory)
+{
+	fm_vec_u32 a, b;
+	uint32_t *v = (uint32_t *)memory;
+	uint32_t sum = 0;
+	uint64_t i;
+	unsigned j;
+
+	if (!iters)
+		return 0;
+	memcpy(&a, v, sizeof a);
+	memcpy(&b, v + 4, sizeof b);
+	for (i = 0; i < iters; i++) {
+		a = a + b;
+		b = b ^ a;
+		a = a + b;
+		b = b ^ a;
+	}
+	memcpy(v, &a, sizeof a);
+	memcpy(v + 4, &b, sizeof b);
+	for (j = 0; j < 8; j++)
+		sum ^= v[j];
+	return sum;
+}
+#else
 /* These are kept in fossmark_ppc32_ext.S so this translation unit, and thus
  * the executable's default code path, only requires baseline PPC32. */
 extern void fm_simd_ps_kernel(uint64_t iters, void *memory);
@@ -159,6 +192,7 @@ uint64_t fm_simd(uint64_t iters, void *memory)
 		sum ^= v[j];
 	return sum;
 }
+#endif
 
 static uint32_t load32_native(const uint8_t *p)
 {

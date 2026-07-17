@@ -6,7 +6,7 @@ across every available core. The final report includes separate single-core and
 multicore scores.
 
 The repository currently builds an executable named `fossmark` for ARM64,
-x86-64, and 32-bit big-endian PowerPC. The C driver handles timing, memory,
+x86-64, and 32- or 64-bit big-endian PowerPC. The C driver handles timing, memory,
 threads, output, and scoring. Performance-sensitive kernels live in
 architecture-specific backend files.
 
@@ -51,18 +51,20 @@ Other targets are available for explicit platforms and architectures:
 make linux-arm64
 make linux-amd64
 make linux-ppc32be
+make linux-ppc64be       # PowerPC 970 / iMac G5
 make macos-arm64
 make macos-amd64
 make all
 ```
 
-`make all` builds all three Linux targets. Cross-compilation requires a suitable
+`make all` builds all four Linux targets. Cross-compilation requires a suitable
 toolchain. Override the target compiler when its name differs from the default:
 
 ```sh
 make linux-arm64 CC_ARM64=aarch64-linux-gnu-gcc
 make linux-amd64 CC_AMD64=x86_64-linux-gnu-gcc
 make linux-ppc32be CC_PPC32BE=powerpc-linux-gnu-gcc
+make linux-ppc64be CC_PPC64BE=powerpc64-linux-gnu-gcc
 ```
 
 Apple Clang can build either macOS architecture with `-arch`. Windows timing
@@ -93,6 +95,10 @@ make CFLAGS='-O2 -Wall -Wextra -DFM_API_BASE_URL=\"https://bench.example.com\"'
 
 HTTPS uploads use OpenSSL with certificate and hostname verification.
 
+The PPC64 target is big-endian and is compiled for the PowerPC 970 with
+AltiVec, matching the CPU used by the iMac G5. It targets 64-bit Linux; use a
+PowerPC64 Linux installation or live environment on the machine to run it.
+
 Release binaries statically include OpenSSL. Linux releases are fully static;
 macOS releases retain only Apple's required system-library linkage because the
 macOS toolchain does not support fully static executables.
@@ -101,7 +107,7 @@ macOS toolchain does not support fully static executables.
 
 Pushing a Git tag runs the GitHub Actions build and correctness tests. If they
 succeed, the workflow creates a GitHub Release named `Release <tag name>` with
-Linux archives for AMD64, ARM64, and PPC32 big-endian, macOS archives for AMD64
+Linux archives for AMD64, ARM64, PPC32 big-endian, and PPC64 big-endian; macOS archives for AMD64
 and ARM64, and a `SHA256SUMS` file.
 
 ## Scores
@@ -149,6 +155,8 @@ The kernel backends use only baseline instructions for their architecture:
   the device-tree `compatible` property begins with `nintendo,`; otherwise it
   selects VSX, AltiVec, or the scalar fallback in that order according to
   Linux `AT_HWCAP`.
+* The same C backend builds for 64-bit big-endian PowerPC. Its PPC64 path uses
+  the PowerPC 970's AltiVec unit and leaves out the PPC32-only assembly helpers.
 
 The PPC32 build uses a 2 MiB pointer-chase cycle, which exceeds the 750CL's L2
 cache while keeping peak benchmark memory consumption below 32 MiB. Other
@@ -183,7 +191,7 @@ with a nonzero status if any check fails.
 src/main.c              portable benchmark driver and scoring
 src/fossmark.S          ARM64 kernels
 src/fossmark_x86_64.S   x86-64 kernels
-src/fossmark_ppc32.c    PPC32 big-endian kernels
+src/fossmark_ppc32.c    PPC32/PPC64 big-endian kernels
 src/fossmark_ppc32_ext.S optional PPC32 PS, VSX, and AltiVec kernels
 src/test_kernels.c      correctness suite
 Makefile                native and cross-build targets
