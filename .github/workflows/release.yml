@@ -1,0 +1,95 @@
+name: Build and release
+
+on:
+  push:
+    tags:
+      - '**'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      matrix:
+        os:
+          - ubuntu-24.04
+          - macos-14
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Run kernel correctness tests
+        run: make test
+
+  build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-amd64
+            os: ubuntu-24.04
+          - target: linux-arm64
+            os: ubuntu-24.04
+          - target: macos-amd64
+            os: macos-14
+          - target: macos-arm64
+            os: macos-14
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install the Linux ARM64 cross-compiler
+        if: matrix.target == 'linux-arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gcc-aarch64-linux-gnu
+
+      - name: Build
+        run: make ${{ matrix.target }}
+
+      - name: Package artifact
+        run: tar -czf fossmark-${{ matrix.target }}.tar.gz -C dist fossmark-${{ matrix.target }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fossmark-${{ matrix.target }}
+          path: fossmark-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub release
+    needs:
+      - test
+      - build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: fossmark-*
+          path: release
+          merge-multiple: true
+
+      - name: Create checksums
+        working-directory: release
+        run: sha256sum fossmark-*.tar.gz > SHA256SUMS
+
+      - name: Create release and attach artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            release/fossmark-*.tar.gz \
+            release/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Release $RELEASE_TAG" \
+            --generate-notes

@@ -73,6 +73,12 @@ Run the benchmark with extra per-test details by passing `--verbose`:
 
 The exact filename depends on the host platform and architecture.
 
+## Continuous integration and releases
+
+Pushing a Git tag runs the GitHub Actions build and correctness tests. If they
+succeed, the workflow creates a GitHub Release named `Release <tag name>` with
+Linux and macOS archives for AMD64 and ARM64, plus a `SHA256SUMS` file.
+
 ## Scores
 
 Each workload receives a score relative to a reference rate:
