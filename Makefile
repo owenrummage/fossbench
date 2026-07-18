@@ -3,6 +3,7 @@
 # The assembly kernels are architecture-specific:
 #   src/fossmark.S         AArch64 (ARM64)
 #   src/fossmark_x86_64.S  x86-64  (AMD64)
+#   src/fossmark_i386.S    x86     32-bit (i386, Pentium 4 baseline)
 #   src/fossmark_ppc32.c   PowerPC 32-bit, including big-endian systems
 #                          and the portable PPC64 kernel implementations
 # The C driver (src/main.c) is portable across architectures and OSes. A
@@ -48,7 +49,7 @@ DIST      := dist
 DRIVER    := src/main.c
 ASM_ARM64 := src/fossmark.S
 ASM_AMD64 := src/fossmark_x86_64.S
-SRC_I386  := src/fossmark_ppc32.c
+ASM_I386  := src/fossmark_i386.S
 SRC_PPC32 := src/fossmark_ppc32.c
 ASM_PPC32 := src/fossmark_ppc32_ext.S
 SRC_PPC64 := src/fossmark_ppc32.c
@@ -63,7 +64,7 @@ else ifneq (,$(filter x86_64 amd64,$(HOST_ARCH)))
 	HOST_KERNEL   := $(ASM_AMD64)
 else ifneq (,$(filter i386 i486 i586 i686 x86,$(HOST_ARCH)))
 	HOST_ARCHNAME := i386
-	HOST_KERNEL   := $(SRC_I386)
+	HOST_KERNEL   := $(ASM_I386)
 else ifneq (,$(filter ppc powerpc ppc32 powerpc32,$(HOST_ARCH)))
 	HOST_ARCHNAME := ppc32be
 	HOST_KERNEL   := $(SRC_PPC32) $(ASM_PPC32)
@@ -75,7 +76,16 @@ else
 $(error unsupported host architecture '$(HOST_ARCH)')
 endif
 ifeq ($(HOST_ARCHNAME),i386)
-	CFLAGS += -march=pentium4 -msse2
+	# The kernels are hand-written assembly (fossmark_i386.S) using SSE2
+	# directly, so -msse2/-mfpmath=sse have nothing left to gate - only
+	# main.c (the portable driver) is still compiled from C here.
+	#
+	# -fno-pie: i386 PIC costs a whole general-purpose register (already the
+	# scarcest resource in 32-bit mode) for the life of any function that
+	# touches global data or calls out - a tax amd64/arm64 don't pay the same
+	# way. Paired with -no-pie at link time below.
+	CFLAGS  += -march=pentium4 -fno-pie
+	LDFLAGS += -no-pie
 endif
 ifeq ($(HOST_ARCHNAME),ppc64be)
 	CFLAGS += -mcpu=970 -maltivec
@@ -154,8 +164,8 @@ $(DIST)/fossmark-linux-amd64: $(DRIVER) $(ASM_AMD64) | $(DIST)
 	$(CC_AMD64) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_AMD64) $(LDLIBS)
 	@echo "built $@"
 
-$(DIST)/fossmark-linux-i386: $(DRIVER) $(SRC_I386) | $(DIST)
-	$(CC_I386) -m32 -march=pentium4 -msse2 $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(SRC_I386) $(LDLIBS)
+$(DIST)/fossmark-linux-i386: $(DRIVER) $(ASM_I386) | $(DIST)
+	$(CC_I386) -m32 -march=pentium4 -fno-pie -no-pie $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_I386) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossmark-linux-ppc32be: $(DRIVER) $(SRC_PPC32) $(ASM_PPC32) | $(DIST)
@@ -213,7 +223,7 @@ bench: $(NATIVE_BIN)
 
 # Build and run the kernel correctness tests for the host arch.
 test: | $(DIST)
-	$(CC) $(CFLAGS) $(PTHREAD) -o $(DIST)/test_kernels src/test_kernels.c $(HOST_KERNEL) -lm
+	$(CC) $(CFLAGS) $(PTHREAD) $(LDFLAGS) -o $(DIST)/test_kernels src/test_kernels.c $(HOST_KERNEL) -lm
 	./$(DIST)/test_kernels
 
 clean:

@@ -42,7 +42,7 @@
 #ifndef FM_API_BASE_URL
 #  define FM_API_BASE_URL "https://fossbench.net"
 #endif
-#define FM_VERSION "0.1.3-hotfix4"
+#define FM_VERSION "0.1.4"
 
 /* ---------- platform identification (for the banner only) ---------- */
 

@@ -170,4 +170,5 @@ jobs:
             release/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --title "Release $RELEASE_TAG" \
+            --notes "⚠️ **i386 (Pentium 4) support is new in this release and still being validated on real hardware.** i386 benchmark scores should not be considered accurate yet." \
             --generate-notes

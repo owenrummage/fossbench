@@ -164,6 +164,11 @@ The kernel backends use only baseline instructions for their architecture:
 
 * `src/fossmark.S` uses ARMv8-A and NEON under AAPCS64.
 * `src/fossmark_x86_64.S` uses baseline x86-64 and SSE2 under the System V ABI.
+* `src/fossmark_i386.S` uses baseline 32-bit x86 (Pentium 4) and SSE2 under the
+  i386 System V (cdecl) ABI. With only six general-purpose registers, no
+  64-bit integer registers, and half of amd64's SSE2 register file (xmm0-7),
+  several kernels keep working state on the stack instead of in registers -
+  a real cost of the architecture, not an oversight.
 * `src/fossmark_ppc32.c` is endian-safe and keeps a baseline 32-bit PowerPC
   fallback. At runtime, the extended-instruction test uses Paired Singles when
   the device-tree `compatible` property begins with `nintendo,`; otherwise it
@@ -205,6 +210,7 @@ with a nonzero status if any check fails.
 src/main.c              portable benchmark driver and scoring
 src/fossmark.S          ARM64 kernels
 src/fossmark_x86_64.S   x86-64 kernels
+src/fossmark_i386.S     i386 (Pentium 4) kernels
 src/fossmark_ppc32.c    PPC32/PPC64 big-endian kernels
 src/fossmark_ppc32_ext.S optional PPC32 PS, VSX, and AltiVec kernels
 src/test_kernels.c      correctness suite
