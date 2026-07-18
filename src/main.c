@@ -24,6 +24,9 @@
 #include <unistd.h>
 #include <ctype.h>
 #include <errno.h>
+#if defined(__linux__)
+#  include <dirent.h>
+#endif
 
 #if !defined(_WIN32)
 #  include <sys/socket.h>
@@ -38,6 +41,7 @@
 #  include <sys/types.h>
 #  include <sys/sysctl.h>
 #  include <mach/mach_time.h>
+#  include <mach/mach.h>
 #endif
 #if defined(_WIN32) && (defined(__i386__) || defined(__x86_64__))
 #  include <cpuid.h>
@@ -47,7 +51,7 @@
 #ifndef FB_API_BASE_URL
 #  define FB_API_BASE_URL "https://fossbench.net"
 #endif
-#define FB_VERSION "0.1.5-hotfix3"
+#define FB_VERSION "0.1.6"
 
 /* ---------- platform identification (for the banner only) ---------- */
 
@@ -98,6 +102,7 @@
 #if defined(_WIN32)
 #  define WIN32_LEAN_AND_MEAN
 #  include <windows.h>
+#  include <tlhelp32.h>
 #  include <winhttp.h>
 static double now_seconds(void)
 {
@@ -259,6 +264,103 @@ static void xfree(void *p)
 #endif
 }
 
+struct background_metrics {
+	double average_cpu_percent, peak_cpu_percent;
+	long available_memory_mb, process_count;
+	int samples, available;
+};
+
+struct cpu_snapshot { uint64_t total, idle; };
+
+static int take_cpu_snapshot(struct cpu_snapshot *s)
+{
+#if defined(__linux__)
+	FILE *f = fopen("/proc/stat", "r");
+	unsigned long long user=0, nice=0, system=0, idle=0, wait=0, irq=0, softirq=0, steal=0;
+	int n;
+	if (!f) return 0;
+	n = fscanf(f, "cpu %llu %llu %llu %llu %llu %llu %llu %llu",
+		   &user, &nice, &system, &idle, &wait, &irq, &softirq, &steal);
+	fclose(f); if (n < 4) return 0;
+	s->idle = idle + wait;
+	s->total = user + nice + system + idle + wait + irq + softirq + steal;
+	return 1;
+#elif defined(__APPLE__)
+	host_cpu_load_info_data_t cpu; mach_msg_type_number_t count = HOST_CPU_LOAD_INFO_COUNT;
+	if (host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, (host_info_t)&cpu, &count) != KERN_SUCCESS) return 0;
+	s->idle = cpu.cpu_ticks[CPU_STATE_IDLE];
+	s->total = cpu.cpu_ticks[CPU_STATE_USER] + cpu.cpu_ticks[CPU_STATE_SYSTEM] + s->idle + cpu.cpu_ticks[CPU_STATE_NICE];
+	return 1;
+#elif defined(_WIN32)
+	FILETIME idle, kernel, user; ULARGE_INTEGER i, k, u;
+	if (!GetSystemTimes(&idle, &kernel, &user)) return 0;
+	i.LowPart=idle.dwLowDateTime; i.HighPart=idle.dwHighDateTime;
+	k.LowPart=kernel.dwLowDateTime; k.HighPart=kernel.dwHighDateTime;
+	u.LowPart=user.dwLowDateTime; u.HighPart=user.dwHighDateTime;
+	s->idle=i.QuadPart; s->total=k.QuadPart+u.QuadPart; return 1;
+#else
+	(void)s; return 0;
+#endif
+}
+
+static void take_resource_snapshot(long *available_mb, long *processes)
+{
+	*available_mb = -1; *processes = -1;
+#if defined(__linux__)
+	{
+		FILE *f=fopen("/proc/meminfo","r"); char line[256]; long kb;
+		if (f) { while (fgets(line,sizeof(line),f)) if (sscanf(line,"MemAvailable: %ld kB",&kb)==1) { *available_mb=kb/1024; break; } fclose(f); }
+	}
+	{
+		DIR *dir=opendir("/proc"); struct dirent *entry; long count=0;
+		if (dir) { while ((entry=readdir(dir)) != NULL) { const char *p=entry->d_name; if (!*p) continue; while (*p && isdigit((unsigned char)*p)) p++; if (!*p) count++; } closedir(dir); *processes=count; }
+	}
+#elif defined(__APPLE__)
+	{
+		vm_statistics_data_t vm; mach_msg_type_number_t count=HOST_VM_INFO_COUNT; vm_size_t page;
+		if (host_page_size(mach_host_self(),&page)==KERN_SUCCESS && host_statistics(mach_host_self(),HOST_VM_INFO,(host_info_t)&vm,&count)==KERN_SUCCESS)
+			*available_mb=(long)(((uint64_t)vm.free_count+vm.inactive_count)*page/1024/1024);
+	}
+	{
+		int mib[4]={CTL_KERN,KERN_PROC,KERN_PROC_ALL,0}; size_t bytes=0;
+		if (sysctl(mib,4,NULL,&bytes,NULL,0)==0) *processes=(long)(bytes/sizeof(struct kinfo_proc));
+	}
+#elif defined(_WIN32)
+	{
+		MEMORYSTATUSEX ms; ms.dwLength=sizeof(ms); if (GlobalMemoryStatusEx(&ms)) *available_mb=(long)(ms.ullAvailPhys/1024/1024);
+	}
+	{
+		HANDLE snap=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0); PROCESSENTRY32 entry; long count=0; entry.dwSize=sizeof(entry);
+		if (snap!=INVALID_HANDLE_VALUE) { if (Process32First(snap,&entry)) do { count++; } while (Process32Next(snap,&entry)); CloseHandle(snap); *processes=count; }
+	}
+#endif
+}
+
+static void sample_background_metrics(struct background_metrics *m, int seconds)
+{
+	struct cpu_snapshot before, after; int i;
+	memset(m,0,sizeof(*m)); m->available_memory_mb=-1; m->process_count=-1;
+	printf("\n  checking background system activity for %d seconds",seconds); fflush(stdout);
+	if (!take_cpu_snapshot(&before)) { printf("... unavailable\n"); return; }
+	for (i=0;i<seconds;i++) {
+#if defined(_WIN32)
+		Sleep(1000);
+#else
+		sleep(1);
+#endif
+		if (take_cpu_snapshot(&after) && after.total>before.total) {
+			uint64_t total=after.total-before.total, idle=after.idle-before.idle;
+			double busy=100.0*(double)(total > idle ? total-idle : 0)/(double)total;
+			m->average_cpu_percent+=busy; if (busy>m->peak_cpu_percent) m->peak_cpu_percent=busy;
+			m->samples++; before=after;
+		}
+		printf("."); fflush(stdout);
+	}
+	take_resource_snapshot(&m->available_memory_mb,&m->process_count);
+	if (m->samples) { m->average_cpu_percent/=m->samples; m->available=1; }
+	printf(" done\n");
+}
+
 /* ---------- workload state ----------
  *
  * Because every core runs the same kernel simultaneously, each core needs its
@@ -292,6 +394,7 @@ struct system_info {
 	char model[256];
 	char operating_system[256];
 	char compiler[128];
+	char kernel[128];
 	long cpu_cores;
 	long cpu_threads;
 	long memory_mb;
@@ -350,6 +453,11 @@ static void detect_system_info(struct system_info *info)
 #endif
 
 #if defined(__linux__)
+	{
+		struct utsname u;
+		if (uname(&u) == 0)
+			snprintf(info->kernel, sizeof(info->kernel), "%s %s", u.sysname, u.release);
+	}
 	{
 		static const char *const model_paths[] = {
 			"/sys/firmware/devicetree/base/compatible",
@@ -432,8 +540,12 @@ static void detect_system_info(struct system_info *info)
 		if (sysctlbyname("hw.memsize", &mem, &mn, NULL, 0) == 0) info->memory_mb = (long)(mem / 1024 / 1024);
 	}
 	{
-		struct utsname u; if (uname(&u) == 0)
-			snprintf(info->operating_system, sizeof(info->operating_system), "macOS %s", u.release);
+		char product[64] = ""; size_t pn = sizeof(product);
+		struct utsname u;
+		if (sysctlbyname("kern.osproductversion", product, &pn, NULL, 0) == 0)
+			snprintf(info->operating_system, sizeof(info->operating_system), "macOS %s", product);
+		if (uname(&u) == 0)
+			snprintf(info->kernel, sizeof(info->kernel), "%s %s", u.sysname, u.release);
 	}
 #elif defined(_WIN32)
 	{
@@ -441,6 +553,21 @@ static void detect_system_info(struct system_info *info)
 		ms.dwLength = sizeof(ms);
 		if (GlobalMemoryStatusEx(&ms))
 			info->memory_mb = (long)(ms.ullTotalPhys / 1024 / 1024);
+	}
+	{
+		OSVERSIONINFOEXA version;
+		typedef LONG (WINAPI *rtl_get_version_fn)(OSVERSIONINFOEXA *);
+		rtl_get_version_fn rtl_get_version = (rtl_get_version_fn)(void *)
+			GetProcAddress(GetModuleHandleA("ntdll.dll"), "RtlGetVersion");
+		memset(&version, 0, sizeof(version)); version.dwOSVersionInfoSize = sizeof(version);
+		if (rtl_get_version && rtl_get_version(&version) == 0) {
+			snprintf(info->operating_system, sizeof(info->operating_system),
+				 "Windows %lu.%lu (build %lu)", (unsigned long)version.dwMajorVersion,
+				 (unsigned long)version.dwMinorVersion, (unsigned long)version.dwBuildNumber);
+			snprintf(info->kernel, sizeof(info->kernel), "NT %lu.%lu build %lu",
+				 (unsigned long)version.dwMajorVersion, (unsigned long)version.dwMinorVersion,
+				 (unsigned long)version.dwBuildNumber);
+		}
 	}
 #if defined(__i386__) || defined(__x86_64__)
 	{
@@ -990,15 +1117,17 @@ done:
 #endif
 
 static int upload_results(const struct system_info *info, double score,
-			  uint64_t duration_ms, const char *token)
+			  double singlecore_score, const struct result *multi,
+			  const struct result *single, uint64_t duration_ms,
+			  const struct background_metrics *background, const char *token)
 {
-	char host[256], port[16], path[512], payload[2048];
+	char host[256], port[16], path[512], payload[16384];
 	char auth_header[600];
-	char cpu[512], model[512], os[512], compiler[256];
+	char cpu[512], model[512], os[512], compiler[256], kernel[256];
 	const char *base = FB_API_BASE_URL, *p, *slash, *colon;
 	int use_tls, status = 0, payload_len;
 #if !defined(_WIN32)
-	char request[4096], response[512];
+	char request[20000], response[512];
 	struct addrinfo hints, *addresses = NULL, *a;
 	SSL_CTX *tls_ctx = NULL;
 	SSL *tls = NULL;
@@ -1034,15 +1163,53 @@ static int upload_results(const struct system_info *info, double score,
 	json_escape(info->model, model, sizeof(model));
 	json_escape(info->operating_system, os, sizeof(os));
 	json_escape(info->compiler, compiler, sizeof(compiler));
+	json_escape(info->kernel, kernel, sizeof(kernel));
 	/* "fossmark_version" is the API's field name, fixed by the server
 	 * contract; it does not track this client's own product name. */
 	payload_len = snprintf(payload, sizeof(payload),
 		"{\"cpu\":\"%s\",\"model\":\"%s\",\"cpu_cores\":%ld,\"cpu_threads\":%ld,"
 		"\"memory_mb\":%ld,\"operating_system\":\"%s\",\"compiler\":\"%s\","
-		"\"fossmark_version\":\"%s\",\"score\":%.2f,\"duration_ms\":%llu}",
+		"\"fossmark_version\":\"%s\",\"score\":%.17g,\"duration_ms\":%llu,"
+		"\"score_details\":{\"scoring_method\":\"weighted_geometric_mean\","
+		"\"target_score\":%.17g,\"multicore_score\":%.17g,\"singlecore_score\":%.17g,"
+		"\"minimum_test_seconds\":%.17g,\"repeats\":%d,"
+		"\"system_environment\":{\"kernel\":\"%s\",\"sample_seconds\":%d,"
+		"\"background_cpu_average_percent\":%.17g,\"background_cpu_peak_percent\":%.17g,"
+		"\"available_memory_mb\":%ld,\"process_count\":%ld},\"tests\":[",
 		cpu, model, info->cpu_cores, info->cpu_threads, info->memory_mb, os, compiler,
-		FB_VERSION, score, (unsigned long long)duration_ms);
+		FB_VERSION, score, (unsigned long long)duration_ms, FB_TARGET_SCORE, score,
+		singlecore_score, MIN_SECONDS, REPEATS, kernel, background->samples,
+		background->average_cpu_percent, background->peak_cpu_percent,
+		background->available_memory_mb, background->process_count);
 	if (payload_len < 0 || (size_t)payload_len >= sizeof(payload)) return 0;
+	{
+		size_t used = (size_t)payload_len;
+		size_t i;
+		for (i = 0; i < NTESTS; i++) {
+			int n = snprintf(payload + used, sizeof(payload) - used,
+				"%s{\"name\":\"%s\",\"detail\":\"%s\",\"unit\":\"%s\","
+				"\"start_iterations\":%llu,\"work_per_iteration\":%.17g,"
+				"\"reference_rate\":%.17g,\"weight\":%.17g,"
+				"\"multicore\":{\"display_metric\":%.17g,\"rate\":%.17g,\"score\":%.17g,"
+				"\"seconds\":%.17g,\"iterations\":%llu,\"threads\":%d,\"checksum\":\"%llu\"},"
+				"\"singlecore\":{\"display_metric\":%.17g,\"rate\":%.17g,\"score\":%.17g,"
+				"\"seconds\":%.17g,\"iterations\":%llu,\"threads\":%d,\"checksum\":\"%llu\"}}",
+				i ? "," : "", tests[i].name, tests[i].detail, tests[i].unit,
+				(unsigned long long)tests[i].start_n, tests[i].work_per_n,
+				tests[i].ref_rate, tests[i].weight,
+				display_metric(&tests[i], &multi[i]), multi[i].rate, multi[i].score,
+				multi[i].seconds, (unsigned long long)multi[i].iters, multi[i].threads,
+				(unsigned long long)multi[i].checksum,
+				display_metric(&tests[i], &single[i]), single[i].rate, single[i].score,
+				single[i].seconds, (unsigned long long)single[i].iters, single[i].threads,
+				(unsigned long long)single[i].checksum);
+			if (n < 0 || (size_t)n >= sizeof(payload) - used) return 0;
+			used += (size_t)n;
+		}
+		if (used + 3 >= sizeof(payload)) return 0;
+		memcpy(payload + used, "]}}", 4);
+		payload_len = (int)(used + 3);
+	}
 
 	auth_header[0] = '\0';
 	if (token && token[0]) {
@@ -1149,6 +1316,7 @@ static void print_header(const struct system_info *info)
 	printf("  cores:     %ld physical / %ld threads\n", info->cpu_cores, info->cpu_threads);
 	printf("  memory:    %ld MB\n", info->memory_mb);
 	printf("  OS:        %s (%s)\n", info->operating_system, FB_ARCH);
+	printf("  kernel:    %s\n", info->kernel[0] ? info->kernel : "unknown");
 	printf("  compiler:  %s\n", info->compiler);
 	printf("\n");
 	printf("  %-24s %12s  %-11s %8s %9s\n",
@@ -1161,12 +1329,14 @@ int main(int argc, char **argv)
 {
 	struct result multi[NTESTS], single[NTESTS];
 	struct system_info system_info;
+	struct background_metrics background;
 	double multi_log_sum = 0.0, single_log_sum = 0.0;
 	double weight_sum = 0.0;
 	double benchmark_started, multicore_score, singlecore_score;
 	uint64_t duration_ms;
 	int verbose = 0;
 	int upload_mode = 0;	/* 0 = ask, 1 = force upload, 2 = force no upload */
+	int system_check = 1;
 	size_t i;
 
 	for (i = 1; i < (size_t)argc; i++) {
@@ -1185,9 +1355,11 @@ int main(int argc, char **argv)
 				return 1;
 			}
 			upload_mode = 2;
+		} else if (strcmp(argv[i], "--no-system-check") == 0) {
+			system_check = 0;
 		} else if (strcmp(argv[i], "-h") == 0 ||
 			   strcmp(argv[i], "--help") == 0) {
-			printf("usage: %s [-v|--verbose] [--upload|--noupload]\n", argv[0]);
+			printf("usage: %s [-v|--verbose] [--upload|--noupload] [--no-system-check]\n", argv[0]);
 			return 0;
 		} else {
 			fprintf(stderr, "fossbench: unknown option '%s'\n",
@@ -1207,6 +1379,20 @@ int main(int argc, char **argv)
 		g_ncores = n > 0 ? n : 1;
 	}
 	detect_system_info(&system_info);
+	memset(&background, 0, sizeof(background));
+	background.available_memory_mb = background.process_count = -1;
+	if (system_check) {
+		sample_background_metrics(&background, 10);
+		if (background.available) {
+			printf("  background CPU: %.1f%% average / %.1f%% peak\n",
+			       background.average_cpu_percent, background.peak_cpu_percent);
+			if (background.available_memory_mb >= 0)
+				printf("  available memory: %ld MB of %ld MB\n", background.available_memory_mb, system_info.memory_mb);
+			if (background.process_count >= 0) printf("  processes: %ld\n", background.process_count);
+			if (background.average_cpu_percent >= 10.0)
+				printf("  warning: background CPU activity may reduce benchmark scores\n");
+		}
+	}
 	benchmark_started = now_seconds();
 
 	printf("\n  preparing workloads...");
@@ -1299,7 +1485,8 @@ int main(int argc, char **argv)
 		}
 
 		if (do_upload)
-			upload_results(&system_info, multicore_score, duration_ms, token);
+			upload_results(&system_info, multicore_score, singlecore_score,
+				       multi, single, duration_ms, &background, token);
 	}
 	return 0;
 }

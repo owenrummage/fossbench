@@ -102,7 +102,14 @@ The exact filename depends on the host platform and architecture.
 
 At startup, fossbench reports the detected CPU model, physical cores, logical
 threads, installed memory, operating system, architecture, and compiler. At the
-end it prints the composite scores and total benchmark duration, then asks
+start of a normal run it also samples whole-system CPU activity for ten seconds,
+then reports average and peak background CPU use, available memory, the current
+process count, and the OS kernel/build. Use `--no-system-check` to skip this
+startup sample (for example, in automated test runs). These summary metrics and
+the kernel/build identifier are included with uploaded result diagnostics; no
+process names or command lines are collected.
+
+At the end it prints the composite scores and total benchmark duration, then asks
 whether to upload the result. Uploading is opt-in and anonymous by default; no
 account or API token is required. Pass `--upload` to upload without asking, or
 `--noupload` to skip the prompt and never upload.
