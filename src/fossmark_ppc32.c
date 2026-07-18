@@ -11,6 +11,10 @@
 #include <stdio.h>
 #include <string.h>
 
+#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
+#include <emmintrin.h>
+#endif
+
 #if defined(__linux__)
 #include <sys/auxv.h>
 #endif
@@ -64,7 +68,7 @@ uint64_t fm_primes(uint64_t limit, uint8_t *sieve)
 	return count;
 }
 
-#if !defined(__powerpc64__)
+#if defined(__powerpc__) && !defined(__powerpc64__)
 static uint64_t fm_simd_scalar(uint64_t iters, void *memory)
 {
 	uint32_t *v = (uint32_t *)memory;
@@ -109,7 +113,7 @@ uint64_t fm_simd(uint64_t iters, void *memory)
 		sum ^= v[j];
 	return sum;
 }
-#else
+#elif defined(__powerpc__)
 /* These are kept in fossmark_ppc32_ext.S so this translation unit, and thus
  * the executable's default code path, only requires baseline PPC32. */
 extern void fm_simd_ps_kernel(uint64_t iters, void *memory);
@@ -188,6 +192,31 @@ uint64_t fm_simd(uint64_t iters, void *memory)
 		return fm_simd_scalar(iters, memory);
 
 	selected(iters, memory);
+	for (j = 0; j < 8; j++)
+		sum ^= v[j];
+	return sum;
+}
+#else
+uint64_t fm_simd(uint64_t iters, void *memory)
+{
+	__m128i a, b;
+	uint32_t *v = (uint32_t *)memory;
+	uint32_t sum = 0;
+	uint64_t i;
+	unsigned j;
+
+	if (!iters)
+		return 0;
+	a = _mm_loadu_si128((const __m128i *)v);
+	b = _mm_loadu_si128((const __m128i *)(v + 4));
+	for (i = 0; i < iters; i++) {
+		a = _mm_add_epi32(a, b);
+		b = _mm_xor_si128(b, a);
+		a = _mm_add_epi32(a, b);
+		b = _mm_xor_si128(b, a);
+	}
+	_mm_storeu_si128((__m128i *)v, a);
+	_mm_storeu_si128((__m128i *)(v + 4), b);
 	for (j = 0; j < 8; j++)
 		sum ^= v[j];
 	return sum;

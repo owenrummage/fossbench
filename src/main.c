@@ -42,7 +42,7 @@
 #ifndef FM_API_BASE_URL
 #  define FM_API_BASE_URL "https://fossbench.net"
 #endif
-#define FM_VERSION "0.1.3-hotfix3"
+#define FM_VERSION "0.1.3-hotfix4"
 
 /* ---------- platform identification (for the banner only) ---------- */
 
@@ -66,6 +66,11 @@
 #  define D_INT  "64-bit ALU: imul, mul, div, bitops"
 #  define D_FP   "double: mulsd/addsd, divsd, sqrtsd"
 #  define D_SIMD "SSE2: 128-bit integer + float"
+#elif defined(__i386__) || defined(_M_IX86)
+#  define FM_ARCH "x86 32-bit"
+#  define D_INT  "Pentium 4 integer ALU and software 64-bit arithmetic"
+#  define D_FP   "x87 scalar double-precision floating point"
+#  define D_SIMD "SSE2: 128-bit integer vectors"
 #elif defined(__powerpc64__)
 #  define FM_ARCH "PowerPC 64-bit big-endian"
 #  define D_INT  "64-bit PowerPC integer ALU"
@@ -145,6 +150,9 @@ extern uint64_t fm_chase(void **ptrs, uint64_t steps);
 #if defined(__powerpc__) && !defined(__powerpc64__)
 #  define CHASE_NODES	(1u << 19)		/* 2 MiB with 32-bit pointers */
 #  define CHASE_DETAIL	"dependent-load pointer chase, 2 MiB"
+#elif UINTPTR_MAX == UINT32_MAX
+#  define CHASE_NODES	(1u << 21)		/* 8 MiB with 32-bit pointers */
+#  define CHASE_DETAIL	"dependent-load pointer chase, 8 MiB"
 #else
 #  define CHASE_NODES	(1u << 21)		/* 16 MiB cycle, > any L2 */
 #  define CHASE_DETAIL	"dependent-load pointer chase, 16 MiB"

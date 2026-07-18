@@ -6,7 +6,7 @@ across every available core. The final report includes separate single-core and
 multicore scores.
 
 The repository currently builds an executable named `fossmark` for ARM64,
-x86-64, and 32- or 64-bit big-endian PowerPC. The C driver handles timing, memory,
+x86 (Pentium 4 or newer), x86-64, and 32- or 64-bit big-endian PowerPC. The C driver handles timing, memory,
 threads, output, and scoring. Performance-sensitive kernels live in
 architecture-specific backend files.
 
@@ -50,6 +50,7 @@ Other targets are available for explicit platforms and architectures:
 ```sh
 make linux-arm64
 make linux-amd64
+make linux-i386          # Pentium 4 / SSE2 baseline
 make linux-ppc32be
 make linux-ppc64be       # PowerPC 970 / iMac G5
 make macos-arm64
@@ -63,6 +64,7 @@ toolchain. Override the target compiler when its name differs from the default:
 ```sh
 make linux-arm64 CC_ARM64=aarch64-linux-gnu-gcc
 make linux-amd64 CC_AMD64=x86_64-linux-gnu-gcc
+make linux-i386 CC_I386=gcc
 make linux-ppc32be CC_PPC32BE=powerpc-linux-gnu-gcc
 make linux-ppc64be CC_PPC64BE=powerpc64-linux-gnu-gcc
 ```

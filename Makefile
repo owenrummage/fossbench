@@ -48,6 +48,7 @@ DIST      := dist
 DRIVER    := src/main.c
 ASM_ARM64 := src/fossmark.S
 ASM_AMD64 := src/fossmark_x86_64.S
+SRC_I386  := src/fossmark_ppc32.c
 SRC_PPC32 := src/fossmark_ppc32.c
 ASM_PPC32 := src/fossmark_ppc32_ext.S
 SRC_PPC64 := src/fossmark_ppc32.c
@@ -60,6 +61,9 @@ ifneq (,$(filter aarch64 arm64,$(HOST_ARCH)))
 else ifneq (,$(filter x86_64 amd64,$(HOST_ARCH)))
 	HOST_ARCHNAME := amd64
 	HOST_KERNEL   := $(ASM_AMD64)
+else ifneq (,$(filter i386 i486 i586 i686 x86,$(HOST_ARCH)))
+	HOST_ARCHNAME := i386
+	HOST_KERNEL   := $(SRC_I386)
 else ifneq (,$(filter ppc powerpc ppc32 powerpc32,$(HOST_ARCH)))
 	HOST_ARCHNAME := ppc32be
 	HOST_KERNEL   := $(SRC_PPC32) $(ASM_PPC32)
@@ -68,7 +72,10 @@ else ifneq (,$(filter ppc64 powerpc64,$(HOST_ARCH)))
 	HOST_KERNEL   := $(SRC_PPC64)
 else
 	HOST_ARCHNAME := $(HOST_ARCH)
-	$(error unsupported host architecture '$(HOST_ARCH)')
+$(error unsupported host architecture '$(HOST_ARCH)')
+endif
+ifeq ($(HOST_ARCHNAME),i386)
+	CFLAGS += -march=pentium4 -msse2
 endif
 ifeq ($(HOST_ARCHNAME),ppc64be)
 	CFLAGS += -mcpu=970 -maltivec
@@ -100,6 +107,11 @@ ifeq ($(HOST_ARCHNAME),amd64)
 else
 	CC_AMD64 ?= x86_64-linux-gnu-gcc
 endif
+ifeq ($(HOST_ARCHNAME),i386)
+	CC_I386 ?= $(CC)
+else
+	CC_I386 ?= cc
+endif
 CC_MACOS_ARM64 ?= $(CC)
 CC_MACOS_AMD64 ?= $(CC)
 MACOS_AMD64_MIN ?= 10.5
@@ -118,16 +130,17 @@ NATIVE_BIN := $(DIST)/fossmark-$(OSNAME)-$(HOST_ARCHNAME)
 
 # `make` with no target builds the host binary, as before.
 .DEFAULT_GOAL := native
-.PHONY: all native linux-arm64 linux-amd64 linux-ppc32be linux-ppc64be macos-arm64 macos-amd64 bench test clean
+.PHONY: all native linux-arm64 linux-amd64 linux-i386 linux-ppc32be linux-ppc64be macos-arm64 macos-amd64 bench test clean
 
 # `make all` builds all Linux binaries.
-all: linux-arm64 linux-amd64 linux-ppc32be linux-ppc64be
+all: linux-arm64 linux-amd64 linux-i386 linux-ppc32be linux-ppc64be
 
 # `make native` (and bare `make`) build for whatever host you are on.
 native: $(NATIVE_BIN)
 
 linux-arm64: $(DIST)/fossmark-linux-arm64
 linux-amd64: $(DIST)/fossmark-linux-amd64
+linux-i386: $(DIST)/fossmark-linux-i386
 linux-ppc32be: $(DIST)/fossmark-linux-ppc32be
 linux-ppc64be: $(DIST)/fossmark-linux-ppc64be
 macos-arm64: $(DIST)/fossmark-macos-arm64
@@ -139,6 +152,10 @@ $(DIST)/fossmark-linux-arm64: $(DRIVER) $(ASM_ARM64) | $(DIST)
 
 $(DIST)/fossmark-linux-amd64: $(DRIVER) $(ASM_AMD64) | $(DIST)
 	$(CC_AMD64) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_AMD64) $(LDLIBS)
+	@echo "built $@"
+
+$(DIST)/fossmark-linux-i386: $(DRIVER) $(SRC_I386) | $(DIST)
+	$(CC_I386) -m32 -march=pentium4 -msse2 $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(SRC_I386) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossmark-linux-ppc32be: $(DRIVER) $(SRC_PPC32) $(ASM_PPC32) | $(DIST)
@@ -164,6 +181,9 @@ ifeq ($(OSNAME)-$(HOST_ARCHNAME),linux-arm64)
 NATIVE_HAS_RULE := yes
 endif
 ifeq ($(OSNAME)-$(HOST_ARCHNAME),linux-amd64)
+NATIVE_HAS_RULE := yes
+endif
+ifeq ($(OSNAME)-$(HOST_ARCHNAME),linux-i386)
 NATIVE_HAS_RULE := yes
 endif
 ifeq ($(OSNAME)-$(HOST_ARCHNAME),linux-ppc32be)
