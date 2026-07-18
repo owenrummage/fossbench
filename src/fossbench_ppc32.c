@@ -20,7 +20,7 @@ static uint32_t rotl32(uint32_t x, unsigned n)
 	return (x << n) | (x >> (32 - n));
 }
 
-uint64_t fm_int_math(uint64_t iters)
+uint64_t fb_int_math(uint64_t iters)
 {
 	uint64_t a = 0x9e3779b97f4a7c15ULL, b = 0xbf58476d1ce4e5b9ULL;
 	uint64_t c = 0x94d049bb133111ebULL, d = 0x2545f4914f6cdd1dULL;
@@ -35,7 +35,7 @@ uint64_t fm_int_math(uint64_t iters)
 	return a ^ b ^ c ^ d;
 }
 
-uint64_t fm_fp_math(uint64_t iters)
+uint64_t fb_fp_math(uint64_t iters)
 {
 	double a = 1.5, b = 2.5, c = 3.5, d = .5, out;
 	uint64_t bits, i;
@@ -52,7 +52,7 @@ uint64_t fm_fp_math(uint64_t iters)
 	return bits;
 }
 
-uint64_t fm_primes(uint64_t limit, uint8_t *sieve)
+uint64_t fb_primes(uint64_t limit, uint8_t *sieve)
 {
 	uint64_t i, j, count = 0;
 	if (limit < 2) return 0;
@@ -65,7 +65,7 @@ uint64_t fm_primes(uint64_t limit, uint8_t *sieve)
 }
 
 #if !defined(__powerpc64__)
-static uint64_t fm_simd_scalar(uint64_t iters, void *memory)
+static uint64_t fb_simd_scalar(uint64_t iters, void *memory)
 {
 	uint32_t *v = (uint32_t *)memory;
 	uint32_t a[8]; uint64_t i; unsigned j; uint32_t sum = 0;
@@ -83,11 +83,11 @@ static uint64_t fm_simd_scalar(uint64_t iters, void *memory)
 /* The PowerPC 970 in every iMac G5 implements AltiVec.  Using GCC's vector
  * type here lets the compiler handle whichever PPC64 ELF ABI the system uses;
  * both PPC64 ABIs differ from the PPC32 assembly convention below. */
-typedef uint32_t fm_vec_u32 __attribute__((vector_size(16)));
+typedef uint32_t fb_vec_u32 __attribute__((vector_size(16)));
 
-uint64_t fm_simd(uint64_t iters, void *memory)
+uint64_t fb_simd(uint64_t iters, void *memory)
 {
-	fm_vec_u32 a, b;
+	fb_vec_u32 a, b;
 	uint32_t *v = (uint32_t *)memory;
 	uint32_t sum = 0;
 	uint64_t i;
@@ -110,13 +110,13 @@ uint64_t fm_simd(uint64_t iters, void *memory)
 	return sum;
 }
 #else
-/* These are kept in fossmark_ppc32_ext.S so this translation unit, and thus
+/* These are kept in fossbench_ppc32_ext.S so this translation unit, and thus
  * the executable's default code path, only requires baseline PPC32. */
-extern void fm_simd_ps_kernel(uint64_t iters, void *memory);
-extern void fm_simd_vsx_kernel(uint64_t iters, void *memory);
-extern void fm_simd_altivec_kernel(uint64_t iters, void *memory);
+extern void fb_simd_ps_kernel(uint64_t iters, void *memory);
+extern void fb_simd_vsx_kernel(uint64_t iters, void *memory);
+extern void fb_simd_altivec_kernel(uint64_t iters, void *memory);
 
-typedef void (*fm_simd_kernel)(uint64_t, void *);
+typedef void (*fb_simd_kernel)(uint64_t, void *);
 
 static int device_is_nintendo(void)
 {
@@ -145,7 +145,7 @@ static int device_is_nintendo(void)
 #endif
 }
 
-static fm_simd_kernel detect_simd_kernel(void)
+static fb_simd_kernel detect_simd_kernel(void)
 {
 	/* Linux exposes these in AT_HWCAP on both 32- and 64-bit PowerPC.
 	 * Spell out the ABI values instead of depending on kernel-only headers. */
@@ -155,23 +155,23 @@ static fm_simd_kernel detect_simd_kernel(void)
 	const unsigned long has_vsx = 0x00000080UL;
 
 	if (device_is_nintendo())
-		return fm_simd_ps_kernel;
+		return fb_simd_ps_kernel;
 	if (hwcap & has_vsx)
-		return fm_simd_vsx_kernel;
+		return fb_simd_vsx_kernel;
 	if (hwcap & has_altivec)
-		return fm_simd_altivec_kernel;
+		return fb_simd_altivec_kernel;
 #else
 	if (device_is_nintendo())
-		return fm_simd_ps_kernel;
+		return fb_simd_ps_kernel;
 #endif
 	return NULL;
 }
 
-uint64_t fm_simd(uint64_t iters, void *memory)
+uint64_t fb_simd(uint64_t iters, void *memory)
 {
-	static fm_simd_kernel kernel;
+	static fb_simd_kernel kernel;
 	static int detected;
-	fm_simd_kernel selected;
+	fb_simd_kernel selected;
 	uint32_t *v = (uint32_t *)memory;
 	uint32_t sum = 0;
 	unsigned j;
@@ -179,13 +179,13 @@ uint64_t fm_simd(uint64_t iters, void *memory)
 	if (!iters)
 		return 0;
 	if (!__atomic_load_n(&detected, __ATOMIC_ACQUIRE)) {
-		fm_simd_kernel found = detect_simd_kernel();
+		fb_simd_kernel found = detect_simd_kernel();
 		__atomic_store_n(&kernel, found, __ATOMIC_RELAXED);
 		__atomic_store_n(&detected, 1, __ATOMIC_RELEASE);
 	}
 	selected = __atomic_load_n(&kernel, __ATOMIC_RELAXED);
 	if (selected == NULL)
-		return fm_simd_scalar(iters, memory);
+		return fb_simd_scalar(iters, memory);
 
 	selected(iters, memory);
 	for (j = 0; j < 8; j++)
@@ -199,7 +199,7 @@ static uint32_t load32_native(const uint8_t *p)
 	uint32_t v; memcpy(&v, p, sizeof v); return v;
 }
 
-uint64_t fm_compress(const uint8_t *src, uint64_t len, uint32_t *ht)
+uint64_t fb_compress(const uint8_t *src, uint64_t len, uint32_t *ht)
 {
 	uint64_t ip = 0, anchor = 0, out = 0, ref, ml, lit;
 	memset(ht, 0, (size_t)(1U << 16) * sizeof *ht);
@@ -225,7 +225,7 @@ static void store32le(uint8_t *p, uint32_t v)
 	p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
 }
 #define QR(a,b,c,d) do { a+=b; d=rotl32(d^a,16); c+=d; b=rotl32(b^c,12); a+=b; d=rotl32(d^a,8); c+=d; b=rotl32(b^c,7); } while (0)
-uint64_t fm_chacha20(uint8_t *buf, uint64_t len, const uint8_t key[32], uint64_t passes)
+uint64_t fb_chacha20(uint8_t *buf, uint64_t len, const uint8_t key[32], uint64_t passes)
 {
 	static const uint32_t sigma[4] = {0x61707865,0x3320646e,0x79622d32,0x6b206574};
 	uint32_t base[16], x[16], counter = 0, checksum = 0; uint64_t pass, off; int i, r;
@@ -241,7 +241,7 @@ uint64_t fm_chacha20(uint8_t *buf, uint64_t len, const uint8_t key[32], uint64_t
 }
 #undef QR
 
-uint64_t fm_physics(double *b, uint64_t n, uint64_t steps)
+uint64_t fb_physics(double *b, uint64_t n, uint64_t steps)
 {
 	uint64_t s,i,j,bits; double sum=0;
 	if (!n || !steps) return 0;
@@ -253,7 +253,7 @@ uint64_t fm_physics(double *b, uint64_t n, uint64_t steps)
 }
 
 static void sift(uint32_t *a, uint64_t root, uint64_t end) { for (;;) { uint64_t c=root*2+1; uint32_t t; if(c>=end)return; if(c+1<end&&a[c+1]>a[c])c++; if(a[root]>=a[c])return; t=a[root];a[root]=a[c];a[c]=t;root=c; } }
-uint64_t fm_sort(uint32_t *a, uint64_t n)
+uint64_t fb_sort(uint32_t *a, uint64_t n)
 {
 	uint64_t i,end,sum=0; uint32_t t; if(n<2)return n?a[0]:0;
 	for (i = n / 2; i; i--)
@@ -265,7 +265,7 @@ uint64_t fm_sort(uint32_t *a, uint64_t n)
 	for(i=0;i<n;i++){sum=(sum>>7)|(sum<<57);sum^=a[i];sum+=a[i];} return sum;
 }
 
-uint64_t fm_chase(void **ptrs, uint64_t steps)
+uint64_t fb_chase(void **ptrs, uint64_t steps)
 {
 	void **p=ptrs; uint64_t i; if(!steps)return 0; for(i=0;i<steps;i++)p=(void **)*p; return (uint64_t)((uintptr_t)p-(uintptr_t)ptrs);
 }

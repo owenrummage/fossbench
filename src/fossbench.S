@@ -1,5 +1,5 @@
 /*
- * fossmark.S - AArch64 CPU benchmark kernels
+ * fossbench.S - AArch64 CPU benchmark kernels
  *
  * OS-independent: contains no syscalls, no libc calls, no relocations against
  * external data. Every routine is a pure function of its arguments under the
@@ -51,14 +51,14 @@
 	.text
 
 /* ===================================================================
- * uint64_t fm_int_math(uint64_t iters)
+ * uint64_t fb_int_math(uint64_t iters)
  *
  * Four largely independent accumulator chains to expose instruction-level
  * parallelism, mixed with high-latency serialising ops (udiv/sdiv) and the
  * bit-manipulation instructions. Returns a checksum so the compiler and the
  * driver cannot elide the work.
  * =================================================================== */
-FN_BEGIN(fm_int_math)
+FN_BEGIN(fb_int_math)
 	cbz	x0, .Lim_zero
 
 	MOV64(x1, 0x9E3779B97F4A7C15)		/* a */
@@ -117,18 +117,18 @@ FN_BEGIN(fm_int_math)
 .Lim_zero:
 	mov	x0, xzr
 	ret
-FN_END(fm_int_math)
+FN_END(fb_int_math)
 
 
 /* ===================================================================
- * uint64_t fm_fp_math(uint64_t iters)
+ * uint64_t fb_fp_math(uint64_t iters)
  *
  * Double-precision scalar FP. Four fmadd chains cover the pipelined
  * multiply-add path; fdiv and fsqrt cover the non-pipelined divide/sqrt unit,
  * which is usually the real differentiator between cores.
  * Returns the result bit-cast to u64.
  * =================================================================== */
-FN_BEGIN(fm_fp_math)
+FN_BEGIN(fb_fp_math)
 	cbz	x0, .Lfp_zero
 	mov	x6, x0
 
@@ -187,7 +187,7 @@ FN_BEGIN(fm_fp_math)
 .Lfp_zero:
 	mov	x0, xzr
 	ret
-FN_END(fm_fp_math)
+FN_END(fb_fp_math)
 
 	.p2align 4
 .Lfp_consts:
@@ -198,7 +198,7 @@ FN_END(fm_fp_math)
 
 
 /* ===================================================================
- * uint64_t fm_primes(uint64_t limit, uint8_t *sieve)
+ * uint64_t fb_primes(uint64_t limit, uint8_t *sieve)
  *
  * Sieve of Eratosthenes over [0, limit). The caller supplies `limit` bytes of
  * scratch; this routine clears it itself, so the clearing pass is part of the
@@ -207,7 +207,7 @@ FN_END(fm_fp_math)
  * Strided stores over a buffer larger than L1 make this a memory-hierarchy
  * test as much as an arithmetic one.
  * =================================================================== */
-FN_BEGIN(fm_primes)
+FN_BEGIN(fb_primes)
 	cmp	x0, #2
 	b.lo	.Lpr_none
 
@@ -280,11 +280,11 @@ FN_BEGIN(fm_primes)
 .Lpr_none:
 	mov	x0, xzr
 	ret
-FN_END(fm_primes)
+FN_END(fb_primes)
 
 
 /* ===================================================================
- * uint64_t fm_simd(uint64_t iters, void *buf)
+ * uint64_t fb_simd(uint64_t iters, void *buf)
  *
  * "Extended instructions": the ASIMD/NEON unit, which is architecturally
  * mandatory on AArch64 and therefore safe to use without runtime feature
@@ -294,7 +294,7 @@ FN_END(fm_primes)
  *
  * buf must be at least 128 bytes and 16-byte aligned. Returns a checksum.
  * =================================================================== */
-FN_BEGIN(fm_simd)
+FN_BEGIN(fb_simd)
 	cbz	x0, .Lsd_zero
 	mov	x6, x0
 
@@ -394,7 +394,7 @@ FN_BEGIN(fm_simd)
 .Lsd_zero:
 	mov	x0, xzr
 	ret
-FN_END(fm_simd)
+FN_END(fb_simd)
 
 	.p2align 4
 .Lsd_perm:
@@ -402,7 +402,7 @@ FN_END(fm_simd)
 
 
 /* ===================================================================
- * uint64_t fm_compress(const uint8_t *src, uint64_t len, uint32_t *ht)
+ * uint64_t fb_compress(const uint8_t *src, uint64_t len, uint32_t *ht)
  *
  * The match-finding inner loop of an LZ77 compressor (the LZ4 fast strategy):
  * hash the next 4 bytes, probe a single-entry-per-bucket table, verify, then
@@ -412,7 +412,7 @@ FN_END(fm_simd)
  * ht must hold 1<<16 uint32_t (256 KiB); this routine clears it itself.
  * Returns the encoded size in bytes.
  * =================================================================== */
-FN_BEGIN(fm_compress)
+FN_BEGIN(fb_compress)
 	stp	x29, x30, [sp, #-96]!
 	mov	x29, sp
 	stp	x19, x20, [sp, #16]
@@ -523,11 +523,11 @@ FN_BEGIN(fm_compress)
 	ldp	x19, x20, [sp, #16]
 	ldp	x29, x30, [sp], #96
 	ret
-FN_END(fm_compress)
+FN_END(fb_compress)
 
 
 /* ===================================================================
- * uint64_t fm_chacha20(uint8_t *buf, uint64_t len, const uint8_t key[32],
+ * uint64_t fb_chacha20(uint8_t *buf, uint64_t len, const uint8_t key[32],
  *                      uint64_t rounds)
  *
  * ChaCha20 stream cipher, NEON, four 128-bit state rows. Chosen over AES
@@ -566,7 +566,7 @@ FN_END(fm_compress)
 	VROTL_ASM \b, \b, v24, 7
 	.endm
 
-FN_BEGIN(fm_chacha20)
+FN_BEGIN(fb_chacha20)
 	and	x1, x1, #~63			/* whole 64-byte blocks only */
 	cbz	x1, .Lcc_zero
 	cbz	x3, .Lcc_zero
@@ -664,7 +664,7 @@ FN_BEGIN(fm_chacha20)
 .Lcc_zero:
 	mov	x0, xzr
 	ret
-FN_END(fm_chacha20)
+FN_END(fb_chacha20)
 
 	.p2align 4
 .Lcc_sigma:
@@ -672,7 +672,7 @@ FN_END(fm_chacha20)
 
 
 /* ===================================================================
- * uint64_t fm_physics(double *bodies, uint64_t n, uint64_t steps)
+ * uint64_t fb_physics(double *bodies, uint64_t n, uint64_t steps)
  *
  * Direct-summation N-body gravity, O(n^2) per step, double precision.
  * Layout per body, 8 doubles (64 bytes, one cache line):
@@ -682,7 +682,7 @@ FN_END(fm_chacha20)
  * so this exercises the divide/sqrt unit the way physics code actually does.
  * Returns a checksum bit-cast from the final velocity sum.
  * =================================================================== */
-FN_BEGIN(fm_physics)
+FN_BEGIN(fb_physics)
 	cbz	x1, .Lph_zero
 	cbz	x2, .Lph_zero
 
@@ -807,7 +807,7 @@ FN_BEGIN(fm_physics)
 .Lph_zero:
 	mov	x0, xzr
 	ret
-FN_END(fm_physics)
+FN_END(fb_physics)
 
 	.p2align 4
 .Lph_consts:
@@ -817,7 +817,7 @@ FN_END(fm_physics)
 
 
 /* ===================================================================
- * uint64_t fm_sort(uint32_t *a, uint64_t n)
+ * uint64_t fb_sort(uint32_t *a, uint64_t n)
  *
  * In-place heapsort. Chosen over quicksort because it needs no recursion or
  * explicit stack, yet is aggressively branch-unpredictable and touches memory
@@ -826,7 +826,7 @@ FN_END(fm_physics)
  *
  * Returns an order-sensitive checksum, which also verifies the sort.
  * =================================================================== */
-FN_BEGIN(fm_sort)
+FN_BEGIN(fb_sort)
 	cmp	x1, #2
 	b.lo	.Lst_trivial
 
@@ -925,11 +925,11 @@ FN_BEGIN(fm_sort)
 
 .Lst_sift_done:
 	ret
-FN_END(fm_sort)
+FN_END(fb_sort)
 
 
 /* ===================================================================
- * uint64_t fm_chase(void **ptrs, uint64_t steps)
+ * uint64_t fb_chase(void **ptrs, uint64_t steps)
  *
  * Pointer chase around a randomised cycle. Every load depends on the previous
  * one, so nothing can be prefetched, overlapped or reordered - this measures
@@ -937,7 +937,7 @@ FN_END(fm_sort)
  * hardest thing for a wide out-of-order core to hide. It is the truest
  * "single-threaded" test in the suite.
  * =================================================================== */
-FN_BEGIN(fm_chase)
+FN_BEGIN(fb_chase)
 	cbz	x1, .Lch_zero
 	mov	x2, x0				/* p = ptrs */
 	mov	x3, x1
@@ -953,7 +953,7 @@ FN_BEGIN(fm_chase)
 .Lch_zero:
 	mov	x0, xzr
 	ret
-FN_END(fm_chase)
+FN_END(fb_chase)
 
 
 #if defined(__ELF__)

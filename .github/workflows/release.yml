@@ -107,8 +107,8 @@ jobs:
           make "${{ matrix.target }}" \
             TLS_CFLAGS="-I$GITHUB_WORKSPACE/openssl-static/include" \
             TLS_LDLIBS="$OPENSSL_LIBDIR/libssl.a $OPENSSL_LIBDIR/libcrypto.a $EXTRA_STATIC_LIBS"
-          file "dist/fossmark-${{ matrix.target }}"
-          if ldd "dist/fossmark-${{ matrix.target }}" | grep -E 'lib(ssl|crypto)'; then
+          file "dist/fossbench-${{ matrix.target }}"
+          if ldd "dist/fossbench-${{ matrix.target }}" | grep -E 'lib(ssl|crypto)'; then
             echo 'Linux release uses dynamic OpenSSL' >&2
             exit 1
           fi
@@ -122,19 +122,19 @@ jobs:
           make "${{ matrix.target }}" \
             TLS_CFLAGS="-I$GITHUB_WORKSPACE/openssl-static/include" \
             TLS_LDLIBS="$OPENSSL_LIBDIR/libssl.a $OPENSSL_LIBDIR/libcrypto.a"
-          if otool -L "dist/fossmark-${{ matrix.target }}" | grep -E 'lib(ssl|crypto)'; then
+          if otool -L "dist/fossbench-${{ matrix.target }}" | grep -E 'lib(ssl|crypto)'; then
             echo 'macOS release uses dynamic OpenSSL' >&2
             exit 1
           fi
 
       - name: Package artifact
-        run: tar -czf fossmark-${{ matrix.target }}.tar.gz -C dist fossmark-${{ matrix.target }}
+        run: tar -czf fossbench-${{ matrix.target }}.tar.gz -C dist fossbench-${{ matrix.target }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fossmark-${{ matrix.target }}
-          path: fossmark-${{ matrix.target }}.tar.gz
+          name: fossbench-${{ matrix.target }}
+          path: fossbench-${{ matrix.target }}.tar.gz
           if-no-files-found: error
 
   release:
@@ -149,13 +149,13 @@ jobs:
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: fossmark-*
+          pattern: fossbench-*
           path: release
           merge-multiple: true
 
       - name: Create checksums
         working-directory: release
-        run: sha256sum fossmark-*.tar.gz > SHA256SUMS
+        run: sha256sum fossbench-*.tar.gz > SHA256SUMS
 
       - name: Create release and attach artifacts
         env:
@@ -166,7 +166,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --yes 2>/dev/null || true
           gh release create "$RELEASE_TAG" \
-            release/fossmark-*.tar.gz \
+            release/fossbench-*.tar.gz \
             release/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --title "Release $RELEASE_TAG" \

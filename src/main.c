@@ -1,18 +1,18 @@
 /*
- * fossmark - a multi-core AArch64 CPU benchmark
+ * fossbench - a multi-core AArch64 CPU benchmark
  *
  * This file is the portable driver: it owns everything the assembly kernels
  * deliberately do not (timing, memory, I/O, scoring). The kernels in
- * fossmark.S are pure computation and identical on every OS; only this file
+ * fossbench.S are pure computation and identical on every OS; only this file
  * knows what an operating system is.
  *
  * Every workload is run twice: once on a single core, and once on all available
  * cores at once - one identical copy of the kernel per core, each with its own
  * private buffers, so the machine is driven to 100%% and the rate is whole-machine
- * throughput. From these two passes fossmark reports two composite scores, a
+ * throughput. From these two passes fossbench reports two composite scores, a
  * SINGLECORE and a MULTICORE, from the same tests and the same weights.
  *
- * Build: cc -O2 -pthread main.c fossmark.S -o fossmark -lm
+ * Build: cc -O2 -pthread main.c fossbench.S -o fossbench -lm
  */
 
 #include <stdio.h>
@@ -38,51 +38,51 @@
 #  include <mach/mach_time.h>
 #endif
 
-/* Change this at build time with -DFM_API_BASE_URL=\"https://host\". */
-#ifndef FM_API_BASE_URL
-#  define FM_API_BASE_URL "https://fossbench.net"
+/* Change this at build time with -DFB_API_BASE_URL=\"https://host\". */
+#ifndef FB_API_BASE_URL
+#  define FB_API_BASE_URL "https://fossbench.net"
 #endif
-#define FM_VERSION "0.1.4"
+#define FB_VERSION "0.1.4"
 
 /* ---------- platform identification (for the banner only) ---------- */
 
 #if defined(_WIN32)
-#  define FM_OS "Windows"
+#  define FB_OS "Windows"
 #elif defined(__APPLE__)
-#  define FM_OS "macOS"
+#  define FB_OS "macOS"
 #elif defined(__linux__)
-#  define FM_OS "Linux"
+#  define FB_OS "Linux"
 #else
-#  define FM_OS "POSIX"
+#  define FB_OS "POSIX"
 #endif
 
 #if defined(__aarch64__) || defined(_M_ARM64)
-#  define FM_ARCH "ARM64"
+#  define FB_ARCH "ARM64"
 #  define D_INT  "64-bit ALU: madd, umulh, udiv, bitops"
 #  define D_FP   "double: fmadd, fdiv, fsqrt"
 #  define D_SIMD "NEON ASIMD: 128-bit integer + float"
 #elif defined(__x86_64__) || defined(_M_X64)
-#  define FM_ARCH "x86-64"
+#  define FB_ARCH "x86-64"
 #  define D_INT  "64-bit ALU: imul, mul, div, bitops"
 #  define D_FP   "double: mulsd/addsd, divsd, sqrtsd"
 #  define D_SIMD "SSE2: 128-bit integer + float"
 #elif defined(__i386__) || defined(_M_IX86)
-#  define FM_ARCH "x86 32-bit"
+#  define FB_ARCH "x86 32-bit"
 #  define D_INT  "Pentium 4 integer ALU and software 64-bit arithmetic"
 #  define D_FP   "x87 scalar double-precision floating point"
 #  define D_SIMD "SSE2: 128-bit integer vectors"
 #elif defined(__powerpc64__)
-#  define FM_ARCH "PowerPC 64-bit big-endian"
+#  define FB_ARCH "PowerPC 64-bit big-endian"
 #  define D_INT  "64-bit PowerPC integer ALU"
 #  define D_FP   "PowerPC scalar double-precision floating point"
 #  define D_SIMD "AltiVec: 128-bit integer vectors (PowerPC 970)"
 #elif defined(__powerpc__)
-#  define FM_ARCH "PowerPC 32-bit big-endian"
+#  define FB_ARCH "PowerPC 32-bit big-endian"
 #  define D_INT  "PPC32 integer ALU and software 64-bit arithmetic"
 #  define D_FP   "PowerPC scalar double-precision floating point"
 #  define D_SIMD "runtime-selected PS, VSX, AltiVec, or scalar"
 #else
-#  define FM_ARCH "unknown"
+#  define FB_ARCH "unknown"
 #  define D_INT  "64-bit integer ALU"
 #  define D_FP   "double-precision FP"
 #  define D_SIMD "128-bit SIMD: integer + float"
@@ -124,16 +124,16 @@ static double now_seconds(void)
 
 /* ---------- the assembly kernels ---------- */
 
-extern uint64_t fm_int_math(uint64_t iters);
-extern uint64_t fm_fp_math(uint64_t iters);
-extern uint64_t fm_primes(uint64_t limit, uint8_t *sieve);
-extern uint64_t fm_simd(uint64_t iters, void *buf);
-extern uint64_t fm_compress(const uint8_t *src, uint64_t len, uint32_t *ht);
-extern uint64_t fm_chacha20(uint8_t *buf, uint64_t len,
+extern uint64_t fb_int_math(uint64_t iters);
+extern uint64_t fb_fp_math(uint64_t iters);
+extern uint64_t fb_primes(uint64_t limit, uint8_t *sieve);
+extern uint64_t fb_simd(uint64_t iters, void *buf);
+extern uint64_t fb_compress(const uint8_t *src, uint64_t len, uint32_t *ht);
+extern uint64_t fb_chacha20(uint8_t *buf, uint64_t len,
 			    const uint8_t key[32], uint64_t rounds);
-extern uint64_t fm_physics(double *bodies, uint64_t n, uint64_t steps);
-extern uint64_t fm_sort(uint32_t *a, uint64_t n);
-extern uint64_t fm_chase(void **ptrs, uint64_t steps);
+extern uint64_t fb_physics(double *bodies, uint64_t n, uint64_t steps);
+extern uint64_t fb_sort(uint32_t *a, uint64_t n);
+extern uint64_t fb_chase(void **ptrs, uint64_t steps);
 
 /* ---------- tuning ---------- */
 
@@ -166,51 +166,51 @@ extern uint64_t fm_chase(void **ptrs, uint64_t steps);
  * The overall score is a WEIGHTED geometric mean of each test's rate expressed
  * relative to a reference machine. Two knobs per test:
  *
- *   FM_REF_*     the reference rate (this machine's measured rate). A machine
- *                matching the reference scores FM_TARGET_SCORE on that test.
- *   FM_WEIGHT_*  how much that test counts toward the overall, by its
+ *   FB_REF_*     the reference rate (this machine's measured rate). A machine
+ *                matching the reference scores FB_TARGET_SCORE on that test.
+ *   FB_WEIGHT_*  how much that test counts toward the overall, by its
  *                influence on everyday user experience. Weights are relative:
  *                only their ratios matter, so they need not sum to anything -
  *                the code normalises by their sum. (They happen to sum to 100
  *                here, so each reads as a percent.)
  *
- * Per-test score:  S_i      = FM_TARGET_SCORE * (rate_i / FM_REF_i)
- * Overall score:   Overall  = FM_TARGET_SCORE *
- *                             exp( Sum(w_i * ln(rate_i/FM_REF_i)) / Sum(w_i) )
+ * Per-test score:  S_i      = FB_TARGET_SCORE * (rate_i / FB_REF_i)
+ * Overall score:   Overall  = FB_TARGET_SCORE *
+ *                             exp( Sum(w_i * ln(rate_i/FB_REF_i)) / Sum(w_i) )
  *
  * On the reference machine every ratio is 1, so every S_i and the overall come
- * out to exactly FM_TARGET_SCORE, regardless of the weights. Scaling is linear
+ * out to exactly FB_TARGET_SCORE, regardless of the weights. Scaling is linear
  * in performance, so far slower machines fall well below (half as fast -> half
  * the score) and faster future machines rise above.
  */
 
-#define FM_TARGET_SCORE		10000.0		/* reference-machine overall */
+#define FB_TARGET_SCORE		10000.0		/* reference-machine overall */
 
 /* Reference rates: this machine, in each test's native unit (see tests[]). */
-#define FM_REF_INT		3086.0		/* Mops/s    */
-#define FM_REF_FP		1682.0		/* Mops/s    */
-#define FM_REF_PRIMES		812.0		/* Mcand/s   */
-#define FM_REF_SIMD		6576.0		/* Mops/s    */
-#define FM_REF_COMPRESS		674.0		/* MB/s      */
-#define FM_REF_CRYPTO		406.0		/* MB/s      */
-#define FM_REF_PHYSICS		631.0		/* Mpair/s   */
-#define FM_REF_SORT		363.0		/* Mkey-cmp/s*/
-#define FM_REF_CHASE		79.0		/* Mhop/s (scoring); shown as ns/access */
+#define FB_REF_INT		3086.0		/* Mops/s    */
+#define FB_REF_FP		1682.0		/* Mops/s    */
+#define FB_REF_PRIMES		812.0		/* Mcand/s   */
+#define FB_REF_SIMD		6576.0		/* Mops/s    */
+#define FB_REF_COMPRESS		674.0		/* MB/s      */
+#define FB_REF_CRYPTO		406.0		/* MB/s      */
+#define FB_REF_PHYSICS		631.0		/* Mpair/s   */
+#define FB_REF_SORT		363.0		/* Mkey-cmp/s*/
+#define FB_REF_CHASE		79.0		/* Mhop/s (scoring); shown as ns/access */
 
 /* Weights: influence on day-to-day, common-workload user experience.
  * Rationale: integer/general-purpose code and memory-latency-bound
  * responsiveness dominate everyday use; specialised FP/physics matter least.
  * Roughly an 80/20 integer-vs-FP split, in the spirit of Geekbench 6's
  * weighted, integer-dominant methodology. Retune freely. */
-#define FM_WEIGHT_INT		20.0		/* general-purpose ALU: everything   */
-#define FM_WEIGHT_CHASE		16.0		/* memory latency: responsiveness    */
-#define FM_WEIGHT_COMPRESS	14.0		/* web, storage, RAM compression     */
-#define FM_WEIGHT_SORT		12.0		/* general data-structure work       */
-#define FM_WEIGHT_SIMD		11.0		/* codecs, mem/string ops, parsing   */
-#define FM_WEIGHT_FP		9.0		/* spreadsheets, app/media math      */
-#define FM_WEIGHT_CRYPTO	8.0		/* TLS, disk encryption (small frac) */
-#define FM_WEIGHT_PRIMES	6.0		/* synthetic ALU+memory proxy        */
-#define FM_WEIGHT_PHYSICS	4.0		/* niche simulation/games            */
+#define FB_WEIGHT_INT		20.0		/* general-purpose ALU: everything   */
+#define FB_WEIGHT_CHASE		16.0		/* memory latency: responsiveness    */
+#define FB_WEIGHT_COMPRESS	14.0		/* web, storage, RAM compression     */
+#define FB_WEIGHT_SORT		12.0		/* general data-structure work       */
+#define FB_WEIGHT_SIMD		11.0		/* codecs, mem/string ops, parsing   */
+#define FB_WEIGHT_FP		9.0		/* spreadsheets, app/media math      */
+#define FB_WEIGHT_CRYPTO	8.0		/* TLS, disk encryption (small frac) */
+#define FB_WEIGHT_PRIMES	6.0		/* synthetic ALU+memory proxy        */
+#define FB_WEIGHT_PHYSICS	4.0		/* niche simulation/games            */
 
 /* ---------- deterministic PRNG (splitmix64) ---------- */
 
@@ -238,7 +238,7 @@ static void *xalloc(size_t n)
 		p = NULL;
 #endif
 	if (!p) {
-		fprintf(stderr, "fossmark: out of memory (%zu bytes)\n", n);
+		fprintf(stderr, "fossbench: out of memory (%zu bytes)\n", n);
 		exit(1);
 	}
 	return p;
@@ -331,8 +331,8 @@ static void detect_system_info(struct system_info *info)
 	memset(info, 0, sizeof(*info));
 	info->cpu_threads = g_ncores;
 	info->cpu_cores = g_ncores;
-	strncpy(info->cpu, FM_ARCH, sizeof(info->cpu) - 1);
-	strncpy(info->operating_system, FM_OS, sizeof(info->operating_system) - 1);
+	strncpy(info->cpu, FB_ARCH, sizeof(info->cpu) - 1);
+	strncpy(info->operating_system, FB_OS, sizeof(info->operating_system) - 1);
 #if defined(__clang__)
 	snprintf(info->compiler, sizeof(info->compiler), "Clang %s", __clang_version__);
 #elif defined(__GNUC__)
@@ -366,7 +366,7 @@ static void detect_system_info(struct system_info *info)
 				if (!colon) continue;
 				*colon++ = '\0'; trim(line); trim(colon);
 				if ((!strcmp(line, "model name") || !strcmp(line, "Processor") ||
-				     !strcmp(line, "cpu")) && info->cpu[0] && !strcmp(info->cpu, FM_ARCH))
+				     !strcmp(line, "cpu")) && info->cpu[0] && !strcmp(info->cpu, FB_ARCH))
 					strncpy(info->cpu, colon, sizeof(info->cpu) - 1);
 				else if (!strcmp(line, "Hardware") && cpuinfo_hardware[0] == '\0')
 					strncpy(cpuinfo_hardware, colon, sizeof cpuinfo_hardware - 1);
@@ -420,7 +420,7 @@ static void detect_system_info(struct system_info *info)
 		size_t model_n = sizeof(info->model);
 		int cores = 0; size_t cn = sizeof(cores);
 		if (sysctlbyname("machdep.cpu.brand_string", info->cpu, &n, NULL, 0) != 0)
-			strncpy(info->cpu, FM_ARCH, sizeof info->cpu - 1);
+			strncpy(info->cpu, FB_ARCH, sizeof info->cpu - 1);
 		sysctlbyname("hw.model", info->model, &model_n, NULL, 0);
 		if (sysctlbyname("hw.physicalcpu", &cores, &cn, NULL, 0) == 0) info->cpu_cores = cores;
 		if (sysctlbyname("hw.memsize", &mem, &mn, NULL, 0) == 0) info->memory_mb = (long)(mem / 1024 / 1024);
@@ -582,18 +582,18 @@ struct test {
 static uint64_t run_int(uint64_t n, struct workspace *ws)
 {
 	(void)ws;
-	return fm_int_math(n * 100000);
+	return fb_int_math(n * 100000);
 }
 static uint64_t run_fp(uint64_t n, struct workspace *ws)
 {
 	(void)ws;
-	return fm_fp_math(n * 100000);
+	return fb_fp_math(n * 100000);
 }
 static uint64_t run_primes(uint64_t n, struct workspace *ws)
 {
 	uint64_t c = 0;
 	for (uint64_t i = 0; i < n; i++)
-		c += fm_primes(PRIME_LIMIT, ws->sieve);
+		c += fb_primes(PRIME_LIMIT, ws->sieve);
 	return c;
 }
 static uint64_t run_simd(uint64_t n, struct workspace *ws)
@@ -601,25 +601,25 @@ static uint64_t run_simd(uint64_t n, struct workspace *ws)
 	/* The kernel is allowed to use its scratch as an accumulator. Restore it
 	 * before every timed run so calibration and repeats see identical input. */
 	memcpy(ws->simd_buf, g_simd_src, SIMD_BUF);
-	return fm_simd(n * 100000, ws->simd_buf);
+	return fb_simd(n * 100000, ws->simd_buf);
 }
 static uint64_t run_compress(uint64_t n, struct workspace *ws)
 {
 	uint64_t c = 0;
 	for (uint64_t i = 0; i < n; i++)
-		c += fm_compress(g_corpus, COMPRESS_LEN, ws->ht);
+		c += fb_compress(g_corpus, COMPRESS_LEN, ws->ht);
 	return c;
 }
 static uint64_t run_crypto(uint64_t n, struct workspace *ws)
 {
-	return fm_chacha20(ws->cipher_buf, CIPHER_LEN, g_key, n);
+	return fb_chacha20(ws->cipher_buf, CIPHER_LEN, g_key, n);
 }
 static uint64_t run_physics(uint64_t n, struct workspace *ws)
 {
 	/* restore initial conditions: the integrator mutates the bodies, so
 	 * a re-run must start from the same state to be reproducible */
 	memcpy(ws->bodies, g_bodies_src, NBODY_N * 8 * sizeof(double));
-	return fm_physics(ws->bodies, NBODY_N, n);
+	return fb_physics(ws->bodies, NBODY_N, n);
 }
 static uint64_t run_sort(uint64_t n, struct workspace *ws)
 {
@@ -628,43 +628,43 @@ static uint64_t run_sort(uint64_t n, struct workspace *ws)
 		/* restore the pristine data: sorting an already-sorted array
 		 * would measure the best case, not the real one */
 		memcpy(ws->sort_work, g_sort_src, SORT_N * sizeof(uint32_t));
-		c ^= fm_sort(ws->sort_work, SORT_N);
+		c ^= fb_sort(ws->sort_work, SORT_N);
 	}
 	return c;
 }
 static uint64_t run_chase(uint64_t n, struct workspace *ws)
 {
-	return fm_chase(ws->chase, n * 1000000);
+	return fb_chase(ws->chase, n * 1000000);
 }
 
 static const struct test tests[] = {
 	{ "Integer Math",         D_INT,
 	  run_int,      20, 100000.0 * 24,  "Mops/s",
-	  FM_REF_INT,      FM_WEIGHT_INT },
+	  FB_REF_INT,      FB_WEIGHT_INT },
 	{ "Floating Point Math",  D_FP,
 	  run_fp,       20, 100000.0 * 20,  "Mops/s",
-	  FM_REF_FP,       FM_WEIGHT_FP },
+	  FB_REF_FP,       FB_WEIGHT_FP },
 	{ "Prime Numbers",        "sieve of Eratosthenes to 2M",
 	  run_primes,    1, (double)PRIME_LIMIT, "Mcand/s",
-	  FM_REF_PRIMES,   FM_WEIGHT_PRIMES },
+	  FB_REF_PRIMES,   FB_WEIGHT_PRIMES },
 	{ "Extended Instructions",D_SIMD,
 	  run_simd,     10, 100000.0 * 32,  "Mops/s",
-	  FM_REF_SIMD,     FM_WEIGHT_SIMD },
+	  FB_REF_SIMD,     FB_WEIGHT_SIMD },
 	{ "Compression",          "LZ77 match finder, 4 MiB corpus",
 	  run_compress,  1, (double)COMPRESS_LEN, "MB/s",
-	  FM_REF_COMPRESS, FM_WEIGHT_COMPRESS },
+	  FB_REF_COMPRESS, FB_WEIGHT_COMPRESS },
 	{ "Encryption",           "ChaCha20, 20 rounds, 1 MiB",
 	  run_crypto,    4, (double)CIPHER_LEN, "MB/s",
-	  FM_REF_CRYPTO,   FM_WEIGHT_CRYPTO },
+	  FB_REF_CRYPTO,   FB_WEIGHT_CRYPTO },
 	{ "Physics",              "512-body direct-sum gravity",
 	  run_physics,   4, (double)NBODY_N * NBODY_N, "Mpair/s",
-	  FM_REF_PHYSICS,  FM_WEIGHT_PHYSICS },
+	  FB_REF_PHYSICS,  FB_WEIGHT_PHYSICS },
 	{ "Sorting",              "heapsort, 1M uint32",
 	  run_sort,      1, (double)SORT_N * 20,  "Mkey-cmp/s",
-	  FM_REF_SORT,     FM_WEIGHT_SORT },
+	  FB_REF_SORT,     FB_WEIGHT_SORT },
 	{ "Memory Latency",       CHASE_DETAIL,
 	  run_chase,     1, 1000000.0,      "ns/access",
-	  FM_REF_CHASE,    FM_WEIGHT_CHASE },
+	  FB_REF_CHASE,    FB_WEIGHT_CHASE },
 };
 
 #define NTESTS (sizeof(tests) / sizeof(tests[0]))
@@ -773,7 +773,7 @@ static struct result run_test(const struct test *t, int threads)
 
 		if (c != checksum) {
 			fprintf(stderr,
-				"fossmark: %s is non-deterministic "
+				"fossbench: %s is non-deterministic "
 				"(checksum %llu != %llu)\n", t->name,
 				(unsigned long long)c,
 				(unsigned long long)checksum);
@@ -791,7 +791,7 @@ static struct result run_test(const struct test *t, int threads)
 	 * the same wall-clock window, so the machine's rate is their sum */
 	r.rate     = ((double)threads * (double)n * t->work_per_n) / best / 1e6;
 	/* normalise against the reference machine: this is the per-test score */
-	r.score    = FM_TARGET_SCORE * (r.rate / t->ref_rate);
+	r.score    = FB_TARGET_SCORE * (r.rate / t->ref_rate);
 	return r;
 }
 
@@ -835,11 +835,12 @@ static void json_escape(const char *src, char *dst, size_t cap)
 
 #if !defined(_WIN32)
 static int upload_results(const struct system_info *info, double score,
-			  uint64_t duration_ms)
+			  uint64_t duration_ms, const char *token)
 {
 	char host[256], port[16], path[512], payload[2048], request[4096];
+	char auth_header[600];
 	char cpu[512], model[512], os[512], compiler[256], response[512];
-	const char *base = FM_API_BASE_URL, *p, *slash, *colon;
+	const char *base = FB_API_BASE_URL, *p, *slash, *colon;
 	struct addrinfo hints, *addresses = NULL, *a;
 	SSL_CTX *tls_ctx = NULL;
 	SSL *tls = NULL;
@@ -874,17 +875,29 @@ static int upload_results(const struct system_info *info, double score,
 	json_escape(info->model, model, sizeof(model));
 	json_escape(info->operating_system, os, sizeof(os));
 	json_escape(info->compiler, compiler, sizeof(compiler));
+	/* "fossmark_version" is the API's field name, fixed by the server
+	 * contract; it does not track this client's own product name. */
 	payload_len = snprintf(payload, sizeof(payload),
 		"{\"cpu\":\"%s\",\"model\":\"%s\",\"cpu_cores\":%ld,\"cpu_threads\":%ld,"
 		"\"memory_mb\":%ld,\"operating_system\":\"%s\",\"compiler\":\"%s\","
 		"\"fossmark_version\":\"%s\",\"score\":%.2f,\"duration_ms\":%llu}",
 		cpu, model, info->cpu_cores, info->cpu_threads, info->memory_mb, os, compiler,
-		FM_VERSION, score, (unsigned long long)duration_ms);
+		FB_VERSION, score, (unsigned long long)duration_ms);
 	if (payload_len < 0 || (size_t)payload_len >= sizeof(payload)) return 0;
+
+	auth_header[0] = '\0';
+	if (token && token[0]) {
+		int n = snprintf(auth_header, sizeof(auth_header),
+				  "Authorization: Bearer %s\r\n", token);
+		if (n < 0 || (size_t)n >= sizeof(auth_header)) {
+			fprintf(stderr, "  upload error: API token too long\n");
+			return 0;
+		}
+	}
 	request_len = snprintf(request, sizeof(request),
 		"POST %s HTTP/1.1\r\nHost: %s:%s\r\nContent-Type: application/json\r\n"
-		"Content-Length: %d\r\nConnection: close\r\n\r\n%s",
-		path, host, port, payload_len, payload);
+		"Content-Length: %d\r\nConnection: close\r\n%s\r\n%s",
+		path, host, port, payload_len, auth_header, payload);
 	if (request_len < 0 || (size_t)request_len >= sizeof(request)) return 0;
 
 	memset(&hints, 0, sizeof(hints)); hints.ai_socktype = SOCK_STREAM; hints.ai_family = AF_UNSPEC;
@@ -931,8 +944,19 @@ static int upload_results(const struct system_info *info, double score,
 	if (tls) { SSL_shutdown(tls); SSL_free(tls); }
 	if (tls_ctx) SSL_CTX_free(tls_ctx);
 	close(fd);
+	if (status == 401) {
+		fprintf(stderr, "  upload failed: API token was rejected (HTTP 401)\n");
+		return 0;
+	}
+	if (status == 422) {
+		fprintf(stderr, "  upload failed: server rejected the submission as invalid (HTTP 422)\n");
+		return 0;
+	}
 	if (status < 200 || status >= 300) { fprintf(stderr, "  upload failed: server returned HTTP %d\n", status); return 0; }
-	printf("  Results uploaded successfully (HTTP %d).\n", status);
+	if (token)
+		printf("  Results uploaded and published to your profile (HTTP %d).\n", status);
+	else
+		printf("  Results uploaded, pending administrator review (HTTP %d).\n", status);
 	return 1;
 
 upload_failed:
@@ -948,13 +972,13 @@ upload_failed:
 static void print_header(const struct system_info *info)
 {
 	printf("\n");
-	printf("  fossbench %s - multi-core CPU benchmark\n", FM_VERSION);
+	printf("  fossbench %s - multi-core CPU benchmark\n", FB_VERSION);
 	printf("  ------------------------------------------------------------------\n");
 	printf("  CPU:       %s\n", info->cpu);
 	printf("  model:     %s\n", info->model[0] ? info->model : "unknown");
 	printf("  cores:     %ld physical / %ld threads\n", info->cpu_cores, info->cpu_threads);
 	printf("  memory:    %ld MB\n", info->memory_mb);
-	printf("  OS:        %s (%s)\n", info->operating_system, FM_ARCH);
+	printf("  OS:        %s (%s)\n", info->operating_system, FB_ARCH);
 	printf("  compiler:  %s\n", info->compiler);
 	printf("\n");
 	printf("  %-24s %12s  %-11s %8s %9s\n",
@@ -972,18 +996,31 @@ int main(int argc, char **argv)
 	double benchmark_started, multicore_score, singlecore_score;
 	uint64_t duration_ms;
 	int verbose = 0;
+	int upload_mode = 0;	/* 0 = ask, 1 = force upload, 2 = force no upload */
 	size_t i;
 
 	for (i = 1; i < (size_t)argc; i++) {
 		if (strcmp(argv[i], "-v") == 0 ||
 		    strcmp(argv[i], "--verbose") == 0) {
 			verbose = 1;
+		} else if (strcmp(argv[i], "--upload") == 0) {
+			if (upload_mode == 2) {
+				fprintf(stderr, "fossbench: --upload conflicts with --noupload\n");
+				return 1;
+			}
+			upload_mode = 1;
+		} else if (strcmp(argv[i], "--noupload") == 0) {
+			if (upload_mode == 1) {
+				fprintf(stderr, "fossbench: --noupload conflicts with --upload\n");
+				return 1;
+			}
+			upload_mode = 2;
 		} else if (strcmp(argv[i], "-h") == 0 ||
 			   strcmp(argv[i], "--help") == 0) {
-			printf("usage: %s [-v|--verbose]\n", argv[0]);
+			printf("usage: %s [-v|--verbose] [--upload|--noupload]\n", argv[0]);
 			return 0;
 		} else {
-			fprintf(stderr, "fossmark: unknown option '%s'\n",
+			fprintf(stderr, "fossbench: unknown option '%s'\n",
 				argv[i]);
 			return 1;
 		}
@@ -1041,9 +1078,9 @@ int main(int argc, char **argv)
 	/*
 	 * Two composite scores, each the WEIGHTED geometric mean of the per-test
 	 * scores from one pass. Per-test scores are already normalised so the
-	 * single-thread reference machine reads FM_TARGET_SCORE. Geometric rather
+	 * single-thread reference machine reads FB_TARGET_SCORE. Geometric rather
 	 * than arithmetic so no single test dominates; weighted so tests count in
-	 * proportion to their influence on everyday use (the FM_WEIGHT_* config).
+	 * proportion to their influence on everyday use (the FB_WEIGHT_* config).
 	 * The two passes share tests and weights, so MULTICORE / SINGLECORE is a
 	 * clean read of how much the machine gains from all its cores.
 	 */
@@ -1058,18 +1095,39 @@ int main(int argc, char **argv)
 	teardown();
 
 	{
-		char answer[16];
-		printf("  Upload this result to %s? [y/N] ", FM_API_BASE_URL);
-		fflush(stdout);
-		if (fgets(answer, sizeof(answer), stdin) &&
-		    (answer[0] == 'y' || answer[0] == 'Y')) {
+		/* the token is read from the environment only: it is never echoed
+		 * back, so it never appears in argv, shell history, or process
+		 * listings from a command-line flag */
+		const char *token = getenv("FOSSBENCH_TOKEN");
+		int do_upload;
+
+		if (token && token[0] == '\0')
+			token = NULL;
+
+		if (upload_mode == 1) {
+			do_upload = 1;
+		} else if (upload_mode == 2) {
+			do_upload = 0;
+			printf("  Result was not uploaded.\n");
+		} else {
+			char answer[16];
+			if (token)
+				printf("  Upload this result to %s using your API token? [y/N] ", FB_API_BASE_URL);
+			else
+				printf("  Upload this result to %s? [y/N] ", FB_API_BASE_URL);
+			fflush(stdout);
+			do_upload = fgets(answer, sizeof(answer), stdin) &&
+				    (answer[0] == 'y' || answer[0] == 'Y');
+			if (!do_upload)
+				printf("  Result was not uploaded.\n");
+		}
+
+		if (do_upload) {
 #if defined(_WIN32)
 			fprintf(stderr, "  Upload is not yet supported on Windows.\n");
 #else
-			upload_results(&system_info, multicore_score, duration_ms);
+			upload_results(&system_info, multicore_score, duration_ms, token);
 #endif
-		} else {
-			printf("  Result was not uploaded.\n");
 		}
 	}
 	return 0;

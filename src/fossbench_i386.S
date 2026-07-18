@@ -1,7 +1,7 @@
 /*
- * fossmark_i386.S - x86 32-bit (i386) CPU benchmark kernels
+ * fossbench_i386.S - x86 32-bit (i386) CPU benchmark kernels
  *
- * The i386 counterpart to fossmark_x86_64.S. Same nine routines, same
+ * The i386 counterpart to fossbench_x86_64.S. Same nine routines, same
  * contract: each is a pure function of its arguments, contains no syscalls,
  * no libc calls and no external data relocations, so it assembles and runs
  * unmodified under the plain i386 SysV (cdecl) ABI on Linux.
@@ -60,7 +60,7 @@
 
 
 /* ===================================================================
- * uint64_t fm_int_math(uint64_t iters)   [ [esp+4]:[esp+8] = iters ]
+ * uint64_t fb_int_math(uint64_t iters)   [ [esp+4]:[esp+8] = iters ]
  *
  * Four independent multiply-accumulate chains (a,b,c,d), each carried as a
  * hi:lo stack-frame pair since there's no register space left to hold four
@@ -73,7 +73,7 @@
  * hi/lo and does two native 32-bit `div`s - the same trick used to fix the
  * C fallback's __udivdi3 calls, now built directly into the kernel.
  * =================================================================== */
-FN_BEGIN(fm_int_math)
+FN_BEGIN(fb_int_math)
 	push	ebp
 	mov	ebp, esp
 	push	ebx
@@ -314,11 +314,11 @@ FN_BEGIN(fm_int_math)
 	pop	ebx
 	pop	ebp
 	ret
-FN_END(fm_int_math)
+FN_END(fb_int_math)
 
 
 /* ===================================================================
- * uint64_t fm_fp_math(uint64_t iters)   [ [esp+4]:[esp+8] = iters ]
+ * uint64_t fb_fp_math(uint64_t iters)   [ [esp+4]:[esp+8] = iters ]
  *
  * Double-precision scalar FP, genuine SSE2 throughout (Pentium 4's SSE2 unit
  * handles mulsd/addsd/minsd/maxsd/divsd/sqrtsd natively - there is no libm
@@ -332,7 +332,7 @@ FN_END(fm_int_math)
  * u64 (edx:eax), matching the uint64_t return type - NOT via the x87
  * ST(0) that a `double` return would use.
  * =================================================================== */
-FN_BEGIN(fm_fp_math)
+FN_BEGIN(fb_fp_math)
 	push	ebp
 	mov	ebp, esp
 	sub	esp, 8
@@ -401,7 +401,7 @@ FN_BEGIN(fm_fp_math)
 	xor	edx, edx
 	leave
 	ret
-FN_END(fm_fp_math)
+FN_END(fb_fp_math)
 
 	.p2align 4
 .Lfp_a_init:
@@ -426,7 +426,7 @@ FN_END(fm_fp_math)
 
 
 /* ===================================================================
- * uint64_t fm_primes(uint64_t limit, uint8_t *sieve)
+ * uint64_t fb_primes(uint64_t limit, uint8_t *sieve)
  *                                        [ [ebp+8]:[ebp+12]=limit, [ebp+16]=sieve ]
  *
  * Sieve of Eratosthenes over [0, limit). Only the low dword of `limit` is
@@ -436,7 +436,7 @@ FN_END(fm_fp_math)
  * Clears its own scratch (32 bytes/iteration via SSE2), then sieves. Returns
  * the prime count in eax (edx=0: the count is always far under 2^32).
  * =================================================================== */
-FN_BEGIN(fm_primes)
+FN_BEGIN(fb_primes)
 	push	ebp
 	mov	ebp, esp
 	push	ebx
@@ -522,11 +522,11 @@ FN_BEGIN(fm_primes)
 	pop	ebx
 	pop	ebp
 	ret
-FN_END(fm_primes)
+FN_END(fb_primes)
 
 
 /* ===================================================================
- * uint64_t fm_simd(uint64_t iters, void *buf)
+ * uint64_t fb_simd(uint64_t iters, void *buf)
  *                                  [ [ebp+8]:[ebp+12]=iters, [ebp+16]=buf ]
  *
  * "Extended instructions": SSE2, architecturally mandatory baseline for this
@@ -542,7 +542,7 @@ FN_END(fm_primes)
  *
  * buf must be at least 96 bytes. Returns a checksum (edx=0).
  * =================================================================== */
-FN_BEGIN(fm_simd)
+FN_BEGIN(fb_simd)
 	push	ebp
 	mov	ebp, esp
 	push	esi
@@ -645,16 +645,16 @@ FN_BEGIN(fm_simd)
 	pop	esi
 	pop	ebp
 	ret
-FN_END(fm_simd)
+FN_END(fb_simd)
 
 
 /* ===================================================================
- * uint64_t fm_compress(const uint8_t *src, uint64_t len, uint32_t *ht)
+ * uint64_t fb_compress(const uint8_t *src, uint64_t len, uint32_t *ht)
  *                       [ [ebp+8]=src, [ebp+12]:[ebp+16]=len, [ebp+20]=ht ]
  *
  * The LZ77 fast-match inner loop (LZ4-style): hash the next 4 bytes, probe a
  * single-entry-per-bucket table, verify, then extend. Only the low dword of
- * `len` is used (a buffer size - see fm_primes). This one has the tightest
+ * `len` is used (a buffer size - see fb_primes). This one has the tightest
  * register budget in the file: ip, ref, end and the match length all need
  * to be live across the byte-by-byte extend loop, which leaves nothing to
  * hold ht/src/anchor/mflimit/outsize in registers too, so those live on the
@@ -664,7 +664,7 @@ FN_END(fm_simd)
  * ht must hold 1<<16 uint32_t (256 KiB); this routine clears it itself.
  * Returns the encoded size in bytes (edx=0).
  * =================================================================== */
-FN_BEGIN(fm_compress)
+FN_BEGIN(fb_compress)
 	push	ebp
 	mov	ebp, esp
 	push	ebx
@@ -788,11 +788,11 @@ FN_BEGIN(fm_compress)
 	pop	ebx
 	pop	ebp
 	ret
-FN_END(fm_compress)
+FN_END(fb_compress)
 
 
 /* rotate each 32-bit lane of v left by n, via shift-left + shift-right + or.
- * xmm7 is scratch (dedicated - see fm_chacha20's register map below). */
+ * xmm7 is scratch (dedicated - see fb_chacha20's register map below). */
 .macro	ROL32_I386 v, n
 	movdqa	xmm7, \v
 	pslld	\v, \n
@@ -817,22 +817,22 @@ FN_END(fm_compress)
 .endm
 
 /* ===================================================================
- * uint64_t fm_chacha20(uint8_t *buf, uint64_t len,
+ * uint64_t fb_chacha20(uint8_t *buf, uint64_t len,
  *                       const uint8_t key[32], uint64_t passes)
  *      [ [ebp+8]=buf, [ebp+12]:[ebp+16]=len, [ebp+20]=key, [ebp+24]:[ebp+28]=passes ]
  *
  * ChaCha20, SSE2, four 128-bit state rows - same 32-bit-mode register
- * squeeze as fm_simd: xmm0-3 are the working state (rows A-D, mutated every
+ * squeeze as fb_simd: xmm0-3 are the working state (rows A-D, mutated every
  * round), xmm4-6 pin the constant/key base rows (re-copied into xmm0-2 each
  * block) and xmm7 is the ROL32 scratch - that is all eight xmm registers
  * with none left over, so unlike the amd64 file, the pre-round state (needed
  * for the feed-forward add) and the running keystream checksum live on the
  * stack instead of in xmm8-13.
  *
- * len is rounded down to a multiple of 64 (buffer size - see fm_primes: low
+ * len is rounded down to a multiple of 64 (buffer size - see fb_primes: low
  * dword only). Returns a checksum of the keystream output (edx=0).
  * =================================================================== */
-FN_BEGIN(fm_chacha20)
+FN_BEGIN(fb_chacha20)
 	push	ebp
 	mov	ebp, esp
 	push	ebx
@@ -970,7 +970,7 @@ FN_BEGIN(fm_chacha20)
 	pop	ebx
 	pop	ebp
 	ret
-FN_END(fm_chacha20)
+FN_END(fb_chacha20)
 
 	.p2align 4
 .Lcc_sigma:
@@ -978,20 +978,20 @@ FN_END(fm_chacha20)
 
 
 /* ===================================================================
- * uint64_t fm_physics(double *bodies, uint64_t n, uint64_t steps)
+ * uint64_t fb_physics(double *bodies, uint64_t n, uint64_t steps)
  *      [ [ebp+8]=bodies, [ebp+12]:[ebp+16]=n, [ebp+20]:[ebp+24]=steps ]
  *
  * Direct-summation N-body gravity, O(n^2) per step, double precision, real
  * sqrtsd+divsd (not an rsqrt estimate). Layout per body, 8 doubles (64
  * bytes): [x y z mass vx vy vz pad]. `n` uses only its low dword (a body
- * count - see fm_primes). xmm0-2 hold body i's position for the whole inner
+ * count - see fb_primes). xmm0-2 hold body i's position for the whole inner
  * loop, xmm3-5 accumulate its acceleration, and xmm6-7 are the only scratch
  * left - not enough to hold dx/dy/dz simultaneously alongside r/1/r/m-over-r3,
  * so the three deltas spill to three stack doubles between being computed
  * and being used in the final ax+=dx*q step. Returns a velocity checksum
  * (edx=0).
  * =================================================================== */
-FN_BEGIN(fm_physics)
+FN_BEGIN(fb_physics)
 	push	ebp
 	mov	ebp, esp
 	push	ebx
@@ -1158,7 +1158,7 @@ FN_BEGIN(fm_physics)
 	pop	ebx
 	pop	ebp
 	ret
-FN_END(fm_physics)
+FN_END(fb_physics)
 
 	.p2align 4
 .Lph_dt:
@@ -1170,11 +1170,11 @@ FN_END(fm_physics)
 
 
 /* ===================================================================
- * uint64_t fm_sort(uint32_t *a, uint64_t n)   [ [ebp+8]=a, [ebp+12]:[ebp+16]=n ]
+ * uint64_t fb_sort(uint32_t *a, uint64_t n)   [ [ebp+8]=a, [ebp+12]:[ebp+16]=n ]
  *
  * In-place heapsort, same shape as the amd64 file: no recursion, an
  * order-sensitive checksum that doubles as a correctness check. `n` uses
- * only its low dword (an element count - see fm_primes). The internal
+ * only its low dword (an element count - see fb_primes). The internal
  * siftdown is reached with `call`/`ret` sharing this function's own frame
  * (no separate prologue) exactly like the amd64 version; it borrows ebx and
  * esi as scratch for the duration of one call via push/pop, since i386 has
@@ -1183,7 +1183,7 @@ FN_END(fm_physics)
  * has no 64-bit rotate) - test_kernels.c only requires it be deterministic
  * and permutation-sensitive, which this is.
  * =================================================================== */
-FN_BEGIN(fm_sort)
+FN_BEGIN(fb_sort)
 	push	ebp
 	mov	ebp, esp
 	push	ebx
@@ -1300,11 +1300,11 @@ FN_BEGIN(fm_sort)
 	pop	esi
 	pop	ebx
 	ret
-FN_END(fm_sort)
+FN_END(fb_sort)
 
 
 /* ===================================================================
- * uint64_t fm_chase(void **ptrs, uint64_t steps)
+ * uint64_t fb_chase(void **ptrs, uint64_t steps)
  *                                  [ [esp+4]=ptrs, [esp+8]:[esp+12]=steps ]
  *
  * Pointer chase around a randomised cycle. Every load depends on the
@@ -1314,7 +1314,7 @@ FN_END(fm_sort)
  * kernel here it has no prologue - args stay at their original [esp+N]
  * offsets since esp never moves.
  * =================================================================== */
-FN_BEGIN(fm_chase)
+FN_BEGIN(fb_chase)
 	mov	ecx, [esp+8]
 	or	ecx, [esp+12]
 	jz	.Lch_zero
@@ -1336,7 +1336,7 @@ FN_BEGIN(fm_chase)
 	xor	eax, eax
 	xor	edx, edx
 	ret
-FN_END(fm_chase)
+FN_END(fb_chase)
 
 
 #if defined(__ELF__)

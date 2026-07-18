@@ -1,18 +1,18 @@
-# fossmark - multi-core CPU benchmark
+# fossbench - multi-core CPU benchmark
 #
 # The assembly kernels are architecture-specific:
-#   src/fossmark.S         AArch64 (ARM64)
-#   src/fossmark_x86_64.S  x86-64  (AMD64)
-#   src/fossmark_i386.S    x86     32-bit (i386, Pentium 4 baseline)
-#   src/fossmark_ppc32.c   PowerPC 32-bit, including big-endian systems
+#   src/fossbench.S         AArch64 (ARM64)
+#   src/fossbench_x86_64.S  x86-64  (AMD64)
+#   src/fossbench_i386.S    x86     32-bit (i386, Pentium 4 baseline)
+#   src/fossbench_ppc32.c   PowerPC 32-bit, including big-endian systems
 #                          and the portable PPC64 kernel implementations
 # The C driver (src/main.c) is portable across architectures and OSes. A
 # "binary that runs everywhere" is not possible - each OS/arch pair uses a
 # different executable format and instruction set - so output is named per
-# platform, e.g. dist/fossmark-linux-arm64, dist/fossmark-linux-amd64.
+# platform, e.g. dist/fossbench-linux-arm64, dist/fossbench-linux-amd64.
 #
 # Common targets:
-#   make               build for the host arch (dist/fossmark-<os>-<arch>)
+#   make               build for the host arch (dist/fossbench-<os>-<arch>)
 #   make linux-arm64   build the Linux/ARM64  binary
 #   make linux-amd64   build the Linux/AMD64  binary
 #   make linux-ppc64be build Linux/PPC64 big-endian for an iMac G5
@@ -47,12 +47,12 @@ PTHREAD := -pthread
 
 DIST      := dist
 DRIVER    := src/main.c
-ASM_ARM64 := src/fossmark.S
-ASM_AMD64 := src/fossmark_x86_64.S
-ASM_I386  := src/fossmark_i386.S
-SRC_PPC32 := src/fossmark_ppc32.c
-ASM_PPC32 := src/fossmark_ppc32_ext.S
-SRC_PPC64 := src/fossmark_ppc32.c
+ASM_ARM64 := src/fossbench.S
+ASM_AMD64 := src/fossbench_x86_64.S
+ASM_I386  := src/fossbench_i386.S
+SRC_PPC32 := src/fossbench_ppc32.c
+ASM_PPC32 := src/fossbench_ppc32_ext.S
+SRC_PPC64 := src/fossbench_ppc32.c
 
 # ---- host detection: normalise `uname -m` to our arch names ----
 HOST_ARCH := $(shell uname -m)
@@ -76,7 +76,7 @@ else
 $(error unsupported host architecture '$(HOST_ARCH)')
 endif
 ifeq ($(HOST_ARCHNAME),i386)
-	# The kernels are hand-written assembly (fossmark_i386.S) using SSE2
+	# The kernels are hand-written assembly (fossbench_i386.S) using SSE2
 	# directly, so -msse2/-mfpmath=sse have nothing left to gate - only
 	# main.c (the portable driver) is still compiled from C here.
 	#
@@ -136,7 +136,7 @@ else
 	CC_PPC64BE ?= powerpc64-linux-gnu-gcc
 endif
 
-NATIVE_BIN := $(DIST)/fossmark-$(OSNAME)-$(HOST_ARCHNAME)
+NATIVE_BIN := $(DIST)/fossbench-$(OSNAME)-$(HOST_ARCHNAME)
 
 # `make` with no target builds the host binary, as before.
 .DEFAULT_GOAL := native
@@ -148,39 +148,39 @@ all: linux-arm64 linux-amd64 linux-i386 linux-ppc32be linux-ppc64be
 # `make native` (and bare `make`) build for whatever host you are on.
 native: $(NATIVE_BIN)
 
-linux-arm64: $(DIST)/fossmark-linux-arm64
-linux-amd64: $(DIST)/fossmark-linux-amd64
-linux-i386: $(DIST)/fossmark-linux-i386
-linux-ppc32be: $(DIST)/fossmark-linux-ppc32be
-linux-ppc64be: $(DIST)/fossmark-linux-ppc64be
-macos-arm64: $(DIST)/fossmark-macos-arm64
-macos-amd64: $(DIST)/fossmark-macos-amd64
+linux-arm64: $(DIST)/fossbench-linux-arm64
+linux-amd64: $(DIST)/fossbench-linux-amd64
+linux-i386: $(DIST)/fossbench-linux-i386
+linux-ppc32be: $(DIST)/fossbench-linux-ppc32be
+linux-ppc64be: $(DIST)/fossbench-linux-ppc64be
+macos-arm64: $(DIST)/fossbench-macos-arm64
+macos-amd64: $(DIST)/fossbench-macos-amd64
 
-$(DIST)/fossmark-linux-arm64: $(DRIVER) $(ASM_ARM64) | $(DIST)
+$(DIST)/fossbench-linux-arm64: $(DRIVER) $(ASM_ARM64) | $(DIST)
 	$(CC_ARM64) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_ARM64) $(LDLIBS)
 	@echo "built $@"
 
-$(DIST)/fossmark-linux-amd64: $(DRIVER) $(ASM_AMD64) | $(DIST)
+$(DIST)/fossbench-linux-amd64: $(DRIVER) $(ASM_AMD64) | $(DIST)
 	$(CC_AMD64) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_AMD64) $(LDLIBS)
 	@echo "built $@"
 
-$(DIST)/fossmark-linux-i386: $(DRIVER) $(ASM_I386) | $(DIST)
+$(DIST)/fossbench-linux-i386: $(DRIVER) $(ASM_I386) | $(DIST)
 	$(CC_I386) -m32 -march=pentium4 -fno-pie -no-pie $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_I386) $(LDLIBS)
 	@echo "built $@"
 
-$(DIST)/fossmark-linux-ppc32be: $(DRIVER) $(SRC_PPC32) $(ASM_PPC32) | $(DIST)
+$(DIST)/fossbench-linux-ppc32be: $(DRIVER) $(SRC_PPC32) $(ASM_PPC32) | $(DIST)
 	$(CC_PPC32BE) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(SRC_PPC32) $(ASM_PPC32) $(LDLIBS)
 	@echo "built $@"
 
-$(DIST)/fossmark-linux-ppc64be: $(DRIVER) $(SRC_PPC64) | $(DIST)
+$(DIST)/fossbench-linux-ppc64be: $(DRIVER) $(SRC_PPC64) | $(DIST)
 	$(CC_PPC64BE) -mcpu=970 -maltivec $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(SRC_PPC64) $(LDLIBS)
 	@echo "built $@"
 
-$(DIST)/fossmark-macos-arm64: $(DRIVER) $(ASM_ARM64) | $(DIST)
+$(DIST)/fossbench-macos-arm64: $(DRIVER) $(ASM_ARM64) | $(DIST)
 	$(CC_MACOS_ARM64) -arch arm64 $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_ARM64) $(LDLIBS)
 	@echo "built $@"
 
-$(DIST)/fossmark-macos-amd64: $(DRIVER) $(ASM_AMD64) | $(DIST)
+$(DIST)/fossbench-macos-amd64: $(DRIVER) $(ASM_AMD64) | $(DIST)
 	MACOSX_DEPLOYMENT_TARGET=$(MACOS_AMD64_MIN) $(CC_MACOS_AMD64) -arch x86_64 -mmacosx-version-min=$(MACOS_AMD64_MIN) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -Wl,-no_fixup_chains -o $@ $(DRIVER) $(ASM_AMD64) $(LDLIBS)
 	@echo "built $@"
 

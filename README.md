@@ -5,7 +5,7 @@ small C driver. It measures each workload twice: once on a single core and once
 across every available core. The final report includes separate single-core and
 multicore scores.
 
-The repository currently builds an executable named `fossmark` for ARM64,
+The repository currently builds an executable named `fossbench` for ARM64,
 x86 (Pentium 4 or newer), x86-64, and 32- or 64-bit big-endian PowerPC. The C driver handles timing, memory,
 threads, output, and scoring. Performance-sensitive kernels live in
 architecture-specific backend files.
@@ -43,7 +43,7 @@ make bench
 ```
 
 `make` builds a binary for the host at
-`dist/fossmark-<os>-<arch>`. `make bench` builds that binary and runs it.
+`dist/fossbench-<os>-<arch>`. `make bench` builds that binary and runs it.
 
 Other targets are available for explicit platforms and architectures:
 
@@ -81,23 +81,35 @@ deployment floor when needed with `MACOS_AMD64_MIN`, for example
 Run the benchmark with extra per-test details by passing `--verbose`:
 
 ```sh
-./dist/fossmark-linux-amd64 --verbose
+./dist/fossbench-linux-amd64 --verbose
 ```
 
 The exact filename depends on the host platform and architecture.
 
-At startup, fossmark reports the detected CPU model, physical cores, logical
+At startup, fossbench reports the detected CPU model, physical cores, logical
 threads, installed memory, operating system, architecture, and compiler. At the
 end it prints the composite scores and total benchmark duration, then asks
-whether to upload the result. Uploading is anonymous and opt-in; no account or
-API token is required.
+whether to upload the result. Uploading is opt-in and anonymous by default; no
+account or API token is required. Pass `--upload` to upload without asking, or
+`--noupload` to skip the prompt and never upload.
 
-The API base URL is defined by `FM_API_BASE_URL` in `src/main.c` and defaults to
+To associate results with your fossbench.net profile instead of submitting
+anonymously, create an API token under Account -> Benchmark client API token
+and set it in the environment:
+
+```sh
+export FOSSBENCH_TOKEN=fb_your_token_here
+./dist/fossbench-linux-amd64 --upload
+```
+
+The token is never printed or logged by fossbench.
+
+The API base URL is defined by `FB_API_BASE_URL` in `src/main.c` and defaults to
 `https://fossbench.net`. A release build can override it without editing the
 source:
 
 ```sh
-make CFLAGS='-O2 -Wall -Wextra -DFM_API_BASE_URL=\"https://bench.example.com\"'
+make CFLAGS='-O2 -Wall -Wextra -DFB_API_BASE_URL=\"https://bench.example.com\"'
 ```
 
 HTTPS uploads use OpenSSL with certificate and hostname verification.
@@ -162,14 +174,14 @@ normal.
 
 The kernel backends use only baseline instructions for their architecture:
 
-* `src/fossmark.S` uses ARMv8-A and NEON under AAPCS64.
-* `src/fossmark_x86_64.S` uses baseline x86-64 and SSE2 under the System V ABI.
-* `src/fossmark_i386.S` uses baseline 32-bit x86 (Pentium 4) and SSE2 under the
+* `src/fossbench.S` uses ARMv8-A and NEON under AAPCS64.
+* `src/fossbench_x86_64.S` uses baseline x86-64 and SSE2 under the System V ABI.
+* `src/fossbench_i386.S` uses baseline 32-bit x86 (Pentium 4) and SSE2 under the
   i386 System V (cdecl) ABI. With only six general-purpose registers, no
   64-bit integer registers, and half of amd64's SSE2 register file (xmm0-7),
   several kernels keep working state on the stack instead of in registers -
   a real cost of the architecture, not an oversight.
-* `src/fossmark_ppc32.c` is endian-safe and keeps a baseline 32-bit PowerPC
+* `src/fossbench_ppc32.c` is endian-safe and keeps a baseline 32-bit PowerPC
   fallback. At runtime, the extended-instruction test uses Paired Singles when
   the device-tree `compatible` property begins with `nintendo,`; otherwise it
   selects VSX, AltiVec, or the scalar fallback in that order according to
@@ -208,11 +220,11 @@ with a nonzero status if any check fails.
 
 ```text
 src/main.c              portable benchmark driver and scoring
-src/fossmark.S          ARM64 kernels
-src/fossmark_x86_64.S   x86-64 kernels
-src/fossmark_i386.S     i386 (Pentium 4) kernels
-src/fossmark_ppc32.c    PPC32/PPC64 big-endian kernels
-src/fossmark_ppc32_ext.S optional PPC32 PS, VSX, and AltiVec kernels
+src/fossbench.S          ARM64 kernels
+src/fossbench_x86_64.S   x86-64 kernels
+src/fossbench_i386.S     i386 (Pentium 4) kernels
+src/fossbench_ppc32.c    PPC32/PPC64 big-endian kernels
+src/fossbench_ppc32_ext.S optional PPC32 PS, VSX, and AltiVec kernels
 src/test_kernels.c      correctness suite
 Makefile                native and cross-build targets
 dist/                   generated binaries
