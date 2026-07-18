@@ -2,7 +2,8 @@
 #
 # The assembly kernels are architecture-specific:
 #   src/fossbench.S         AArch64 (ARM64)
-#   src/fossbench_x86_64.S  x86-64  (AMD64)
+#   src/fossbench_x86_64.S  x86-64  (AMD64) - SysV kernels, Windows callers go
+#                          through a WIN64_THUNK ABI shim (see the file header)
 #   src/fossbench_i386.S    x86     32-bit (i386, Pentium 4 baseline)
 #   src/fossbench_ppc32.c   PowerPC 32-bit, including big-endian systems
 #                          and the portable PPC64 kernel implementations
@@ -18,7 +19,9 @@
 #   make linux-ppc64be build Linux/PPC64 big-endian for an iMac G5
 #   make macos-arm64   build the macOS/ARM64  binary
 #   make macos-amd64   build the macOS/AMD64  binary
-#   make all           build both Linux binaries
+#   make windows-amd64 build the Windows/AMD64 binary (.exe, statically linked)
+#   make windows-i386  build the Windows/i386  binary (.exe, statically linked)
+#   make all           build every release binary (Linux, macOS, Windows)
 #   make bench         build for the host and run it
 #   make test          build and run the kernel correctness tests (host arch)
 #   make clean         remove dist/
@@ -36,6 +39,13 @@
 # be overridden for an osxcross or other cross toolchain:
 #   make macos-arm64 CC_MACOS_ARM64=clang
 #   make macos-amd64 CC_MACOS_AMD64=clang
+#
+# Windows binaries are built with the MinGW-w64 cross toolchain (package
+# mingw-w64-gcc on Arch/Debian/Fedora), statically linked so the .exe needs no
+# accompanying DLLs. Result upload (TLS) is not built for Windows - main.c
+# stubs it out - so no OpenSSL dependency is needed for these targets.
+#   make windows-amd64 CC_WINDOWS_AMD64=x86_64-w64-mingw32-gcc-12
+#   make windows-i386  CC_WINDOWS_I386=i686-w64-mingw32-gcc-12
 
 CC      ?= cc
 CFLAGS  ?= -O2 -Wall -Wextra
@@ -135,15 +145,18 @@ ifeq ($(HOST_ARCHNAME),ppc64be)
 else
 	CC_PPC64BE ?= powerpc64-linux-gnu-gcc
 endif
+# Windows is always cross-compiled with MinGW-w64, regardless of host OS/arch.
+CC_WINDOWS_AMD64 ?= x86_64-w64-mingw32-gcc
+CC_WINDOWS_I386  ?= i686-w64-mingw32-gcc
 
 NATIVE_BIN := $(DIST)/fossbench-$(OSNAME)-$(HOST_ARCHNAME)
 
 # `make` with no target builds the host binary, as before.
 .DEFAULT_GOAL := native
-.PHONY: all native linux-arm64 linux-amd64 linux-i386 linux-ppc32be linux-ppc64be macos-arm64 macos-amd64 bench test clean
+.PHONY: all native linux-arm64 linux-amd64 linux-i386 linux-ppc32be linux-ppc64be macos-arm64 macos-amd64 windows-amd64 windows-i386 bench test clean
 
-# `make all` builds all Linux binaries.
-all: linux-arm64 linux-amd64 linux-i386 linux-ppc32be linux-ppc64be
+# `make all` builds all Linux binaries, plus the (cross-compiled) Windows ones.
+all: linux-arm64 linux-amd64 linux-i386 linux-ppc32be linux-ppc64be windows-amd64 windows-i386
 
 # `make native` (and bare `make`) build for whatever host you are on.
 native: $(NATIVE_BIN)
@@ -155,6 +168,8 @@ linux-ppc32be: $(DIST)/fossbench-linux-ppc32be
 linux-ppc64be: $(DIST)/fossbench-linux-ppc64be
 macos-arm64: $(DIST)/fossbench-macos-arm64
 macos-amd64: $(DIST)/fossbench-macos-amd64
+windows-amd64: $(DIST)/fossbench-windows-amd64.exe
+windows-i386: $(DIST)/fossbench-windows-i386.exe
 
 $(DIST)/fossbench-linux-arm64: $(DRIVER) $(ASM_ARM64) | $(DIST)
 	$(CC_ARM64) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_ARM64) $(LDLIBS)
@@ -182,6 +197,20 @@ $(DIST)/fossbench-macos-arm64: $(DRIVER) $(ASM_ARM64) | $(DIST)
 
 $(DIST)/fossbench-macos-amd64: $(DRIVER) $(ASM_AMD64) | $(DIST)
 	MACOSX_DEPLOYMENT_TARGET=$(MACOS_AMD64_MIN) $(CC_MACOS_AMD64) -arch x86_64 -mmacosx-version-min=$(MACOS_AMD64_MIN) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -Wl,-no_fixup_chains -o $@ $(DRIVER) $(ASM_AMD64) $(LDLIBS)
+	@echo "built $@"
+
+# Windows binaries are statically linked (-static) so the .exe is
+# self-contained: no libwinpthread/libgcc DLLs need to ship alongside it.
+# Result upload (TLS) is stubbed out for Windows in main.c, so unlike every
+# other target here, these don't need $(TLS_CFLAGS)/$(TLS_LDLIBS)/OpenSSL, and
+# $(LDFLAGS) is deliberately not used since it may carry a host-specific
+# -no-pie meant for a native i386 Linux build, not this cross target.
+$(DIST)/fossbench-windows-amd64.exe: $(DRIVER) $(ASM_AMD64) | $(DIST)
+	$(CC_WINDOWS_AMD64) $(CFLAGS) $(PTHREAD) -static -o $@ $(DRIVER) $(ASM_AMD64) -lm
+	@echo "built $@"
+
+$(DIST)/fossbench-windows-i386.exe: $(DRIVER) $(ASM_I386) | $(DIST)
+	$(CC_WINDOWS_I386) -march=pentium4 $(CFLAGS) $(PTHREAD) -static -o $@ $(DRIVER) $(ASM_I386) -lm
 	@echo "built $@"
 
 # When the host is Linux/ARM64 or Linux/AMD64, the native binary IS one of the

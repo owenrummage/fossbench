@@ -32,7 +32,7 @@
 
 	.intel_syntax noprefix
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(_WIN32)
 #  define SYM(name) _##name
 #else
 #  define SYM(name) name

@@ -20,6 +20,14 @@
  *   integer args   rdi, rsi, rdx, rcx, r8, r9   (return in rax)
  *   callee-saved   rbx, rbp, r12, r13, r14, r15 (saved when used)
  *   all of xmm0-15 are caller-saved, so no vector register need be preserved.
+ *
+ * Windows uses a different AMD64 ABI (integer args in rcx, rdx, r8, r9; rdi,
+ * rsi and xmm6-15 callee-saved instead of caller-saved). Every kernel body
+ * below is written once, unchanged, to the System V convention documented
+ * above. On Windows each public name becomes a thin trampoline (WIN64_THUNK)
+ * around a same-named `_sysv` implementation: it saves the registers that
+ * Windows callers expect preserved, remaps args into System V registers, and
+ * calls straight through - so the hot kernel bodies never need two versions.
  */
 
 	.intel_syntax noprefix
@@ -30,8 +38,14 @@
 #  define SYM(name) name
 #endif
 
-#define FN_BEGIN(name) FN_BEGIN_ASM SYM(name)
-#define FN_END(name)   FN_END_ASM SYM(name)
+#if defined(_WIN32)
+#  define ENTRY(name) SYM(name##_sysv)
+#else
+#  define ENTRY(name) SYM(name)
+#endif
+
+#define FN_BEGIN(name) FN_BEGIN_ASM ENTRY(name)
+#define FN_END(name)   FN_END_ASM ENTRY(name)
 
 	.macro	FN_BEGIN_ASM name
 	.p2align 4
@@ -47,6 +61,52 @@
 	.size	\name, . - \name
 #endif
 	.endm
+
+#if defined(_WIN32)
+/* Windows x64 ABI trampoline: save the callee-saved registers System V would
+ * leave to the caller (rdi, rsi, xmm6-15), remap up to 4 integer/pointer
+ * args from the Windows positions (rcx, rdx, r8, r9) into System V (rdi,
+ * rsi, rdx, rcx), call the `_sysv` implementation, then restore. Every
+ * kernel here takes at most 4 integer/pointer args and returns a uint64_t in
+ * rax (identical in both ABIs), so one thunk shape covers all nine. */
+	.macro	WIN64_THUNK pubname, implname
+	.p2align 4
+	.globl	\pubname
+\pubname:
+	push	rdi
+	push	rsi
+	sub	rsp, 0xA8			/* 10 xmm slots + 8 pad, keeps rsp 16-aligned for the call */
+	movdqu	[rsp + 0x00], xmm6
+	movdqu	[rsp + 0x10], xmm7
+	movdqu	[rsp + 0x20], xmm8
+	movdqu	[rsp + 0x30], xmm9
+	movdqu	[rsp + 0x40], xmm10
+	movdqu	[rsp + 0x50], xmm11
+	movdqu	[rsp + 0x60], xmm12
+	movdqu	[rsp + 0x70], xmm13
+	movdqu	[rsp + 0x80], xmm14
+	movdqu	[rsp + 0x90], xmm15
+	mov	rdi, rcx
+	mov	rsi, rdx
+	mov	rdx, r8
+	mov	rcx, r9
+	call	\implname
+	movdqu	xmm6,  [rsp + 0x00]
+	movdqu	xmm7,  [rsp + 0x10]
+	movdqu	xmm8,  [rsp + 0x20]
+	movdqu	xmm9,  [rsp + 0x30]
+	movdqu	xmm10, [rsp + 0x40]
+	movdqu	xmm11, [rsp + 0x50]
+	movdqu	xmm12, [rsp + 0x60]
+	movdqu	xmm13, [rsp + 0x70]
+	movdqu	xmm14, [rsp + 0x80]
+	movdqu	xmm15, [rsp + 0x90]
+	add	rsp, 0xA8
+	pop	rsi
+	pop	rdi
+	ret
+	.endm
+#endif
 
 	.text
 
@@ -991,6 +1051,18 @@ FN_BEGIN(fb_chase)
 	ret
 FN_END(fb_chase)
 
+#if defined(_WIN32)
+	.text
+	WIN64_THUNK SYM(fb_int_math),  SYM(fb_int_math_sysv)
+	WIN64_THUNK SYM(fb_fp_math),   SYM(fb_fp_math_sysv)
+	WIN64_THUNK SYM(fb_primes),    SYM(fb_primes_sysv)
+	WIN64_THUNK SYM(fb_simd),      SYM(fb_simd_sysv)
+	WIN64_THUNK SYM(fb_compress),  SYM(fb_compress_sysv)
+	WIN64_THUNK SYM(fb_chacha20),  SYM(fb_chacha20_sysv)
+	WIN64_THUNK SYM(fb_physics),   SYM(fb_physics_sysv)
+	WIN64_THUNK SYM(fb_sort),      SYM(fb_sort_sysv)
+	WIN64_THUNK SYM(fb_chase),     SYM(fb_chase_sysv)
+#endif
 
 #if defined(__ELF__)
 	.section	.note.GNU-stack, "", @progbits

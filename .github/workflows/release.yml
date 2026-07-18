@@ -54,6 +54,14 @@ jobs:
             os: macos-14
             openssl_target: darwin64-arm64-cc
             cross_prefix: ''
+          - target: windows-amd64
+            os: ubuntu-24.04
+            openssl_target: ''
+            cross_prefix: ''
+          - target: windows-i386
+            os: ubuntu-24.04
+            openssl_target: ''
+            cross_prefix: ''
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out source
@@ -77,7 +85,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes gcc-powerpc-linux-gnu
 
+      - name: Install the Windows/AMD64 cross-compiler
+        if: matrix.target == 'windows-amd64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gcc-mingw-w64-x86-64
+
+      - name: Install the Windows/i386 cross-compiler
+        if: matrix.target == 'windows-i386'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gcc-mingw-w64-i686
+
       - name: Build static OpenSSL
+        if: matrix.openssl_target != ''
         env:
           OPENSSL_VERSION: 3.5.7
           OPENSSL_TARGET: ${{ matrix.openssl_target }}
@@ -127,8 +148,19 @@ jobs:
             exit 1
           fi
 
+      - name: Build Windows executable
+        if: startsWith(matrix.target, 'windows-')
+        run: |
+          make "${{ matrix.target }}"
+          file "dist/fossbench-${{ matrix.target }}.exe"
+
       - name: Package artifact
-        run: tar -czf fossbench-${{ matrix.target }}.tar.gz -C dist fossbench-${{ matrix.target }}
+        run: |
+          bin="fossbench-${{ matrix.target }}"
+          if [[ "${{ matrix.target }}" == windows-* ]]; then
+            bin="$bin.exe"
+          fi
+          tar -czf "fossbench-${{ matrix.target }}.tar.gz" -C dist "$bin"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

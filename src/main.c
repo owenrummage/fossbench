@@ -37,12 +37,15 @@
 #  include <sys/sysctl.h>
 #  include <mach/mach_time.h>
 #endif
+#if defined(_WIN32) && (defined(__i386__) || defined(__x86_64__))
+#  include <cpuid.h>
+#endif
 
 /* Change this at build time with -DFB_API_BASE_URL=\"https://host\". */
 #ifndef FB_API_BASE_URL
 #  define FB_API_BASE_URL "https://fossbench.net"
 #endif
-#define FB_VERSION "0.1.5"
+#define FB_VERSION "0.1.5-hotfix1"
 
 /* ---------- platform identification (for the banner only) ---------- */
 
@@ -429,6 +432,37 @@ static void detect_system_info(struct system_info *info)
 		struct utsname u; if (uname(&u) == 0)
 			snprintf(info->operating_system, sizeof(info->operating_system), "macOS %s", u.release);
 	}
+#elif defined(_WIN32)
+	{
+		MEMORYSTATUSEX ms;
+		ms.dwLength = sizeof(ms);
+		if (GlobalMemoryStatusEx(&ms))
+			info->memory_mb = (long)(ms.ullTotalPhys / 1024 / 1024);
+	}
+#if defined(__i386__) || defined(__x86_64__)
+	{
+		/* CPUID leaves 0x80000002-0x80000004 return the 48-byte brand
+		 * string in eax:ebx:ecx:edx, twelve bytes per leaf. */
+		unsigned eax, ebx, ecx, edx, max_ext;
+		char brand[49];
+		int i;
+		__cpuid(0x80000000, eax, ebx, ecx, edx);
+		max_ext = eax;
+		if (max_ext >= 0x80000004) {
+			for (i = 0; i < 3; i++) {
+				__cpuid(0x80000002u + (unsigned)i, eax, ebx, ecx, edx);
+				memcpy(brand + i * 16 + 0,  &eax, 4);
+				memcpy(brand + i * 16 + 4,  &ebx, 4);
+				memcpy(brand + i * 16 + 8,  &ecx, 4);
+				memcpy(brand + i * 16 + 12, &edx, 4);
+			}
+			brand[48] = '\0';
+			trim(brand);
+			if (brand[0])
+				snprintf(info->cpu, sizeof(info->cpu), "%s", brand);
+		}
+	}
+#endif
 #endif
 }
 
@@ -1027,7 +1061,13 @@ int main(int argc, char **argv)
 	}
 
 	{
+#if defined(_WIN32)
+		SYSTEM_INFO si;
+		GetSystemInfo(&si);
+		long n = (long)si.dwNumberOfProcessors;
+#else
 		long n = sysconf(_SC_NPROCESSORS_ONLN);
+#endif
 		g_ncores = n > 0 ? n : 1;
 	}
 	detect_system_info(&system_info);

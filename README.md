@@ -6,7 +6,8 @@ across every available core. The final report includes separate single-core and
 multicore scores.
 
 The repository currently builds an executable named `fossbench` for ARM64,
-x86 (Pentium 4 or newer), x86-64, and 32- or 64-bit big-endian PowerPC. The C driver handles timing, memory,
+x86 (Pentium 4 or newer), x86-64, and 32- or 64-bit big-endian PowerPC, on
+Linux, macOS, and Windows. The C driver handles timing, memory,
 threads, output, and scoring. Performance-sensitive kernels live in
 architecture-specific backend files.
 
@@ -55,11 +56,14 @@ make linux-ppc32be
 make linux-ppc64be       # PowerPC 970 / iMac G5
 make macos-arm64
 make macos-amd64
+make windows-amd64
+make windows-i386        # Pentium 4 / SSE2 baseline
 make all
 ```
 
-`make all` builds all four Linux targets. Cross-compilation requires a suitable
-toolchain. Override the target compiler when its name differs from the default:
+`make all` builds all five Linux targets plus both Windows targets.
+Cross-compilation requires a suitable toolchain. Override the target compiler
+when its name differs from the default:
 
 ```sh
 make linux-arm64 CC_ARM64=aarch64-linux-gnu-gcc
@@ -67,11 +71,21 @@ make linux-amd64 CC_AMD64=x86_64-linux-gnu-gcc
 make linux-i386 CC_I386=gcc
 make linux-ppc32be CC_PPC32BE=powerpc-linux-gnu-gcc
 make linux-ppc64be CC_PPC64BE=powerpc64-linux-gnu-gcc
+make windows-amd64 CC_WINDOWS_AMD64=x86_64-w64-mingw32-gcc
+make windows-i386 CC_WINDOWS_I386=i686-w64-mingw32-gcc
 ```
 
-Apple Clang can build either macOS architecture with `-arch`. Windows timing
-and allocation code exists in the driver, but the Makefile does not include a
-Windows target and the x86-64 assembly currently follows the System V ABI.
+Apple Clang can build either macOS architecture with `-arch`. Windows
+binaries are cross-compiled with the MinGW-w64 toolchain (package
+`mingw-w64-gcc` on Arch, `gcc-mingw-w64-x86-64` / `gcc-mingw-w64-i686` on
+Debian/Ubuntu) and are statically linked, so the `.exe` needs no
+accompanying DLLs. Windows uses a different AMD64 calling convention than
+Linux/macOS (integer args in `rcx`/`rdx`/`r8`/`r9` rather than
+`rdi`/`rsi`/`rdx`/`rcx`, with `rdi`, `rsi`, and `xmm6`-`xmm15` callee-saved);
+`src/fossbench_x86_64.S` still writes every kernel once to the System V
+convention and wraps each public entry point in a small ABI-translating
+thunk (`WIN64_THUNK`) when building for Windows. Result upload (HTTPS/TLS)
+is not built for Windows, so these targets need no OpenSSL.
 
 The macOS AMD64 target is linked for macOS 10.5 and disables chained fixups so
 its Mach-O load commands are understood by legacy Intel Macs. Override the
@@ -127,14 +141,17 @@ Release binaries statically include OpenSSL. Linux releases dynamically use
 the system C library so DNS resolution can safely load the matching NSS
 modules; they do not require system OpenSSL libraries. macOS releases retain
 only Apple's required system-library linkage because the macOS toolchain does
-not support fully static executables.
+not support fully static executables. Windows releases are fully static,
+including pthreads (winpthreads); result upload is not available on Windows,
+so `--upload`/`FOSSBENCH_TOKEN` have no effect there.
 
 ## Continuous integration and releases
 
 Pushing a Git tag runs the GitHub Actions build and correctness tests. If they
 succeed, the workflow creates a GitHub Release named `Release <tag name>` with
-Linux archives for AMD64, ARM64, and PPC32 big-endian; macOS archives for AMD64
-and ARM64; and a `SHA256SUMS` file. PPC64 remains available as a source build.
+Linux archives for AMD64, i386, ARM64, and PPC32 big-endian; macOS archives for
+AMD64 and ARM64; Windows archives for AMD64 and i386; and a `SHA256SUMS` file.
+PPC64 remains available as a source build.
 
 ## Scores
 
