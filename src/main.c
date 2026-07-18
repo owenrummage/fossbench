@@ -42,7 +42,7 @@
 #ifndef FB_API_BASE_URL
 #  define FB_API_BASE_URL "https://fossbench.net"
 #endif
-#define FB_VERSION "0.1.4"
+#define FB_VERSION "0.1.5"
 
 /* ---------- platform identification (for the banner only) ---------- */
 
