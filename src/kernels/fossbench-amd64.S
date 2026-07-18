@@ -1,7 +1,7 @@
 /*
- * fossbench_x86_64.S - x86-64 (AMD64) CPU benchmark kernels
+ * fossbench-amd64.S - x86-64 (AMD64) CPU benchmark kernels
  *
- * The AMD64 counterpart to fossbench.S. Same nine routines, same contract: each
+ * The AMD64 counterpart to the ARM64 backend. Same nine routines and contract: each
  * is a pure function of its arguments under the System V AMD64 ABI, contains no
  * syscalls, no libc calls and no external data relocations, so it assembles and
  * runs on Linux (ELF), macOS (Mach-O) and the BSDs. The portable C driver in

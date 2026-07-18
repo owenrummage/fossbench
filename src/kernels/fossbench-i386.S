@@ -1,7 +1,7 @@
 /*
- * fossbench_i386.S - x86 32-bit (i386) CPU benchmark kernels
+ * fossbench-i386.S - x86 32-bit (i386) CPU benchmark kernels
  *
- * The i386 counterpart to fossbench_x86_64.S. Same nine routines, same
+ * The i386 counterpart to the AMD64 backend. Same nine routines, same
  * contract: each is a pure function of its arguments, contains no syscalls,
  * no libc calls and no external data relocations, so it assembles and runs
  * unmodified under the plain i386 SysV (cdecl) ABI on Linux.
