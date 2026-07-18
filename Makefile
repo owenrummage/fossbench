@@ -42,8 +42,9 @@
 #
 # Windows binaries are built with the MinGW-w64 cross toolchain (package
 # mingw-w64-gcc on Arch/Debian/Fedora), statically linked so the .exe needs no
-# accompanying DLLs. Result upload (TLS) is not built for Windows - main.c
-# stubs it out - so no OpenSSL dependency is needed for these targets.
+# accompanying DLLs. Result upload (TLS) uses WinHTTP - a system component
+# present on every Windows install - instead of OpenSSL, so no OpenSSL
+# dependency is needed for these targets.
 #   make windows-amd64 CC_WINDOWS_AMD64=x86_64-w64-mingw32-gcc-12
 #   make windows-i386  CC_WINDOWS_I386=i686-w64-mingw32-gcc-12
 
@@ -201,16 +202,17 @@ $(DIST)/fossbench-macos-amd64: $(DRIVER) $(ASM_AMD64) | $(DIST)
 
 # Windows binaries are statically linked (-static) so the .exe is
 # self-contained: no libwinpthread/libgcc DLLs need to ship alongside it.
-# Result upload (TLS) is stubbed out for Windows in main.c, so unlike every
-# other target here, these don't need $(TLS_CFLAGS)/$(TLS_LDLIBS)/OpenSSL, and
-# $(LDFLAGS) is deliberately not used since it may carry a host-specific
-# -no-pie meant for a native i386 Linux build, not this cross target.
+# Result upload uses WinHTTP (-lwinhttp) instead of OpenSSL for TLS, so unlike
+# every other target here, these don't need $(TLS_CFLAGS)/$(TLS_LDLIBS); -static
+# doesn't affect winhttp.dll, which ships with Windows itself. $(LDFLAGS) is
+# deliberately not used since it may carry a host-specific -no-pie meant for a
+# native i386 Linux build, not this cross target.
 $(DIST)/fossbench-windows-amd64.exe: $(DRIVER) $(ASM_AMD64) | $(DIST)
-	$(CC_WINDOWS_AMD64) $(CFLAGS) $(PTHREAD) -static -o $@ $(DRIVER) $(ASM_AMD64) -lm
+	$(CC_WINDOWS_AMD64) $(CFLAGS) $(PTHREAD) -static -o $@ $(DRIVER) $(ASM_AMD64) -lm -lwinhttp
 	@echo "built $@"
 
 $(DIST)/fossbench-windows-i386.exe: $(DRIVER) $(ASM_I386) | $(DIST)
-	$(CC_WINDOWS_I386) -march=pentium4 $(CFLAGS) $(PTHREAD) -static -o $@ $(DRIVER) $(ASM_I386) -lm
+	$(CC_WINDOWS_I386) -march=pentium4 $(CFLAGS) $(PTHREAD) -static -o $@ $(DRIVER) $(ASM_I386) -lm -lwinhttp
 	@echo "built $@"
 
 # When the host is Linux/ARM64 or Linux/AMD64, the native binary IS one of the

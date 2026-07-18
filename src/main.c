@@ -47,7 +47,7 @@
 #ifndef FB_API_BASE_URL
 #  define FB_API_BASE_URL "https://fossbench.net"
 #endif
-#define FB_VERSION "0.1.5-hotfix2"
+#define FB_VERSION "0.1.5-hotfix3"
 
 /* ---------- platform identification (for the banner only) ---------- */
 
@@ -98,6 +98,7 @@
 #if defined(_WIN32)
 #  define WIN32_LEAN_AND_MEAN
 #  include <windows.h>
+#  include <winhttp.h>
 static double now_seconds(void)
 {
 	LARGE_INTEGER f, t;
@@ -893,18 +894,116 @@ static int load_embedded_ca_bundle(SSL_CTX *ctx)
 	ERR_clear_error();	/* PEM_read_bio_X509's final EOF "failure" is expected */
 	return loaded > 0;
 }
+#endif
+
+#if defined(_WIN32)
+/* WinHTTP reports a TLS handshake/certificate problem as one of several
+ * specific ERROR_WINHTTP_SECURE_* codes (untrusted root, expired cert,
+ * hostname mismatch, ...) rather than a single sentinel value. */
+static int is_winhttp_secure_error(DWORD err)
+{
+	switch (err) {
+	case ERROR_WINHTTP_SECURE_CERT_DATE_INVALID:
+	case ERROR_WINHTTP_SECURE_CERT_CN_INVALID:
+	case ERROR_WINHTTP_SECURE_INVALID_CA:
+	case ERROR_WINHTTP_SECURE_CERT_REV_FAILED:
+	case ERROR_WINHTTP_SECURE_CHANNEL_ERROR:
+	case ERROR_WINHTTP_SECURE_INVALID_CERT:
+	case ERROR_WINHTTP_SECURE_CERT_REVOKED:
+	case ERROR_WINHTTP_SECURE_FAILURE:
+	case ERROR_WINHTTP_SECURE_CERT_WRONG_USAGE:
+	case ERROR_WINHTTP_SECURE_FAILURE_PROXY:
+		return 1;
+	default:
+		return 0;
+	}
+}
+
+/* WinHTTP does TLS (and certificate verification, against the system trust
+ * store) itself, so unlike the POSIX+OpenSSL path below, Windows needs
+ * neither an embedded CA bundle nor a hand-rolled HTTP/1.1 request. */
+static int winhttp_post(const char *host, const char *port, const char *path,
+			 int use_tls, const char *payload, int payload_len,
+			 const char *auth_header, int *out_status)
+{
+	wchar_t whost[256], wpath[512], wheaders[700];
+	char header_buf[700];
+	HINTERNET hsession = NULL, hconnect = NULL, hrequest = NULL;
+	INTERNET_PORT wport = (INTERNET_PORT)atoi(port);
+	DWORD status = 0, status_size = sizeof(status);
+	int ok = 0;
+
+	if (MultiByteToWideChar(CP_UTF8, 0, host, -1, whost, sizeof whost / sizeof whost[0]) == 0 ||
+	    MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, sizeof wpath / sizeof wpath[0]) == 0)
+		return 0;
+	snprintf(header_buf, sizeof(header_buf), "Content-Type: application/json\r\n%s", auth_header);
+	if (MultiByteToWideChar(CP_UTF8, 0, header_buf, -1, wheaders, sizeof wheaders / sizeof wheaders[0]) == 0)
+		return 0;
+
+	hsession = WinHttpOpen(L"fossbench", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+			       WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+	if (!hsession) {
+		fprintf(stderr, "  upload error: cannot initialize WinHTTP\n");
+		return 0;
+	}
+	hconnect = WinHttpConnect(hsession, whost, wport, 0);
+	if (!hconnect) {
+		fprintf(stderr, "  upload error: cannot connect to %s:%s\n", host, port);
+		goto done;
+	}
+	hrequest = WinHttpOpenRequest(hconnect, L"POST", wpath, NULL, WINHTTP_NO_REFERER,
+				      WINHTTP_DEFAULT_ACCEPT_TYPES,
+				      use_tls ? WINHTTP_FLAG_SECURE : 0);
+	if (!hrequest) {
+		fprintf(stderr, "  upload error: cannot create HTTP request\n");
+		goto done;
+	}
+	if (!WinHttpSendRequest(hrequest, wheaders, (DWORD)-1L, (LPVOID)payload,
+				(DWORD)payload_len, (DWORD)payload_len, 0)) {
+		if (is_winhttp_secure_error(GetLastError()))
+			fprintf(stderr, "  upload error: TLS connection or certificate verification failed\n");
+		else
+			fprintf(stderr, "  upload error: send failed\n");
+		goto done;
+	}
+	if (!WinHttpReceiveResponse(hrequest, NULL)) {
+		if (is_winhttp_secure_error(GetLastError()))
+			fprintf(stderr, "  upload error: TLS connection or certificate verification failed\n");
+		else
+			fprintf(stderr, "  upload error: no server response\n");
+		goto done;
+	}
+	if (!WinHttpQueryHeaders(hrequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+				 WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size,
+				 WINHTTP_NO_HEADER_INDEX)) {
+		fprintf(stderr, "  upload error: no server response\n");
+		goto done;
+	}
+	*out_status = (int)status;
+	ok = 1;
+done:
+	if (hrequest) WinHttpCloseHandle(hrequest);
+	if (hconnect) WinHttpCloseHandle(hconnect);
+	WinHttpCloseHandle(hsession);
+	return ok;
+}
+#endif
 
 static int upload_results(const struct system_info *info, double score,
 			  uint64_t duration_ms, const char *token)
 {
-	char host[256], port[16], path[512], payload[2048], request[4096];
+	char host[256], port[16], path[512], payload[2048];
 	char auth_header[600];
-	char cpu[512], model[512], os[512], compiler[256], response[512];
+	char cpu[512], model[512], os[512], compiler[256];
 	const char *base = FB_API_BASE_URL, *p, *slash, *colon;
+	int use_tls, status = 0, payload_len;
+#if !defined(_WIN32)
+	char request[4096], response[512];
 	struct addrinfo hints, *addresses = NULL, *a;
 	SSL_CTX *tls_ctx = NULL;
 	SSL *tls = NULL;
-	int use_tls, fd = -1, status = 0, payload_len, request_len;
+	int fd = -1, request_len;
+#endif
 
 	if (!strncmp(base, "https://", 8)) {
 		use_tls = 1; p = base + 8; strcpy(port, "443");
@@ -954,6 +1053,7 @@ static int upload_results(const struct system_info *info, double score,
 			return 0;
 		}
 	}
+#if !defined(_WIN32)
 	request_len = snprintf(request, sizeof(request),
 		"POST %s HTTP/1.1\r\nHost: %s:%s\r\nContent-Type: application/json\r\n"
 		"Content-Length: %d\r\nConnection: close\r\n%s\r\n%s",
@@ -1009,6 +1109,10 @@ static int upload_results(const struct system_info *info, double score,
 	if (tls) { SSL_shutdown(tls); SSL_free(tls); }
 	if (tls_ctx) SSL_CTX_free(tls_ctx);
 	close(fd);
+#else
+	if (!winhttp_post(host, port, path, use_tls, payload, payload_len, auth_header, &status))
+		return 0;
+#endif
 	if (status == 401) {
 		fprintf(stderr, "  upload failed: API token was rejected (HTTP 401)\n");
 		return 0;
@@ -1024,13 +1128,14 @@ static int upload_results(const struct system_info *info, double score,
 		printf("  Results uploaded, pending administrator review (HTTP %d).\n", status);
 	return 1;
 
+#if !defined(_WIN32)
 upload_failed:
 	if (tls) SSL_free(tls);
 	if (tls_ctx) SSL_CTX_free(tls_ctx);
 	if (fd >= 0) close(fd);
 	return 0;
-}
 #endif
+}
 
 /* ---------- output ---------- */
 
@@ -1193,13 +1298,8 @@ int main(int argc, char **argv)
 				printf("  Result was not uploaded.\n");
 		}
 
-		if (do_upload) {
-#if defined(_WIN32)
-			fprintf(stderr, "  Upload is not yet supported on Windows.\n");
-#else
+		if (do_upload)
 			upload_results(&system_info, multicore_score, duration_ms, token);
-#endif
-		}
 	}
 	return 0;
 }
