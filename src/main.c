@@ -31,6 +31,8 @@
 #  include <netdb.h>
 #  include <openssl/ssl.h>
 #  include <openssl/err.h>
+#  include <openssl/pem.h>
+#  include "ca_bundle.h"
 #endif
 #if defined(__APPLE__)
 #  include <sys/types.h>
@@ -45,7 +47,7 @@
 #ifndef FB_API_BASE_URL
 #  define FB_API_BASE_URL "https://fossbench.net"
 #endif
-#define FB_VERSION "0.1.5-hotfix1"
+#define FB_VERSION "0.1.5-hotfix2"
 
 /* ---------- platform identification (for the banner only) ---------- */
 
@@ -868,6 +870,30 @@ static void json_escape(const char *src, char *dst, size_t cap)
 }
 
 #if !defined(_WIN32)
+/* Add fb_ca_bundle_pem's roots to ctx's trust store. SSL_CTX_set_default_verify_paths()
+ * alone isn't enough to verify a server cert on an arbitrary target machine: it only
+ * works if OpenSSL's compiled-in default CA directory/file happens to exist where this
+ * binary ends up running, which is essentially never true for a release binary built
+ * elsewhere (macOS has no such path outside Homebrew; Linux distros disagree on the
+ * location). This embedded bundle is the trust source upload actually relies on; the
+ * system default paths are still tried first so a locally-trusted/corporate CA works too. */
+static int load_embedded_ca_bundle(SSL_CTX *ctx)
+{
+	X509_STORE *store = SSL_CTX_get_cert_store(ctx);
+	BIO *bio = BIO_new_mem_buf(fb_ca_bundle_pem, -1);
+	X509 *cert;
+	int loaded = 0;
+
+	if (!bio) return 0;
+	while ((cert = PEM_read_bio_X509(bio, NULL, NULL, NULL)) != NULL) {
+		if (X509_STORE_add_cert(store, cert)) loaded++;
+		X509_free(cert);
+	}
+	BIO_free(bio);
+	ERR_clear_error();	/* PEM_read_bio_X509's final EOF "failure" is expected */
+	return loaded > 0;
+}
+
 static int upload_results(const struct system_info *info, double score,
 			  uint64_t duration_ms, const char *token)
 {
@@ -946,7 +972,12 @@ static int upload_results(const struct system_info *info, double score,
 	if (fd < 0) { fprintf(stderr, "  upload error: cannot connect to %s:%s\n", host, port); return 0; }
 	if (use_tls) {
 		tls_ctx = SSL_CTX_new(TLS_client_method());
-		if (!tls_ctx || !SSL_CTX_set_default_verify_paths(tls_ctx)) {
+		if (!tls_ctx) {
+			fprintf(stderr, "  upload error: cannot initialize TLS trust store\n");
+			goto upload_failed;
+		}
+		SSL_CTX_set_default_verify_paths(tls_ctx);	/* best-effort; see load_embedded_ca_bundle() */
+		if (!load_embedded_ca_bundle(tls_ctx)) {
 			fprintf(stderr, "  upload error: cannot initialize TLS trust store\n");
 			goto upload_failed;
 		}
