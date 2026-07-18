@@ -109,9 +109,11 @@ libc requires POWER6 instructions and produces release binaries that fault on
 the iMac G5's PowerPC 970. Build `linux-ppc64be` natively on the G5 so it uses
 the compatible Arch POWER ELFv2 runtime.
 
-Release binaries statically include OpenSSL. Linux releases are fully static;
-macOS releases retain only Apple's required system-library linkage because the
-macOS toolchain does not support fully static executables.
+Release binaries statically include OpenSSL. Linux releases dynamically use
+the system C library so DNS resolution can safely load the matching NSS
+modules; they do not require system OpenSSL libraries. macOS releases retain
+only Apple's required system-library linkage because the macOS toolchain does
+not support fully static executables.
 
 ## Continuous integration and releases
 

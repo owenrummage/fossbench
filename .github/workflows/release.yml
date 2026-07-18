@@ -86,7 +86,7 @@ jobs:
           make -j3 build_sw
           make install_sw
 
-      - name: Build static Linux executable
+      - name: Build Linux executable with static OpenSSL
         if: startsWith(matrix.target, 'linux-')
         run: |
           OPENSSL_LIBDIR="$(find "$GITHUB_WORKSPACE/openssl-static" -type f -name libssl.a -exec dirname {} \;)"
@@ -96,11 +96,10 @@ jobs:
           fi
           make "${{ matrix.target }}" \
             TLS_CFLAGS="-I$GITHUB_WORKSPACE/openssl-static/include" \
-            TLS_LDLIBS="$OPENSSL_LIBDIR/libssl.a $OPENSSL_LIBDIR/libcrypto.a $EXTRA_STATIC_LIBS" \
-            LDFLAGS=-static
+            TLS_LDLIBS="$OPENSSL_LIBDIR/libssl.a $OPENSSL_LIBDIR/libcrypto.a $EXTRA_STATIC_LIBS"
           file "dist/fossmark-${{ matrix.target }}"
-          if ldd "dist/fossmark-${{ matrix.target }}" 2>&1 | grep -q '=>'; then
-            echo 'Linux release binary is dynamically linked' >&2
+          if ldd "dist/fossmark-${{ matrix.target }}" | grep -E 'lib(ssl|crypto)'; then
+            echo 'Linux release uses dynamic OpenSSL' >&2
             exit 1
           fi
 
