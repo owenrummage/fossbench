@@ -275,6 +275,7 @@ static uint32_t *g_sort_src;	/* pristine unsorted data                */
 
 struct system_info {
 	char cpu[256];
+	char model[256];
 	char operating_system[256];
 	char compiler[128];
 	long cpu_cores;
@@ -292,8 +293,33 @@ static void trim(char *s)
 	while (n && isspace((unsigned char)s[n - 1])) s[--n] = '\0';
 }
 
+/* Device-tree strings may be NUL-separated lists.  The first entry is the
+ * most-specific compatible identifier, which is the useful model number. */
+static int read_first_property(const char *path, char *dst, size_t cap)
+{
+	FILE *f;
+	size_t n, i;
+
+	if (cap == 0)
+		return 0;
+	f = fopen(path, "rb");
+	if (f == NULL)
+		return 0;
+	n = fread(dst, 1, cap - 1, f);
+	fclose(f);
+	for (i = 0; i < n && dst[i] != '\0' && dst[i] != '\n' && dst[i] != '\r'; i++)
+		if ((unsigned char)dst[i] < 0x20)
+			dst[i] = ' ';
+	dst[i] = '\0';
+	trim(dst);
+	return dst[0] != '\0';
+}
+
 static void detect_system_info(struct system_info *info)
 {
+#if defined(__linux__)
+	char cpuinfo_hardware[sizeof info->model] = "";
+#endif
 	memset(info, 0, sizeof(*info));
 	info->cpu_threads = g_ncores;
 	info->cpu_cores = g_ncores;
@@ -311,6 +337,18 @@ static void detect_system_info(struct system_info *info)
 
 #if defined(__linux__)
 	{
+		static const char *const model_paths[] = {
+			"/sys/firmware/devicetree/base/compatible",
+			"/sys/firmware/devicetree/base/model",
+			"/proc/device-tree/compatible"
+		};
+		unsigned i;
+		for (i = 0; i < sizeof model_paths / sizeof model_paths[0]; i++)
+			if (read_first_property(model_paths[i], info->model,
+						 sizeof info->model))
+				break;
+	}
+	{
 		FILE *f = fopen("/proc/cpuinfo", "r");
 		char line[512];
 		int pairs[1024][2], npairs = 0, physical = -1, core = -1;
@@ -322,6 +360,8 @@ static void detect_system_info(struct system_info *info)
 				if ((!strcmp(line, "model name") || !strcmp(line, "Processor") ||
 				     !strcmp(line, "cpu")) && info->cpu[0] && !strcmp(info->cpu, FM_ARCH))
 					strncpy(info->cpu, colon, sizeof(info->cpu) - 1);
+				else if (!strcmp(line, "Hardware") && cpuinfo_hardware[0] == '\0')
+					strncpy(cpuinfo_hardware, colon, sizeof cpuinfo_hardware - 1);
 				else if (!strcmp(line, "physical id")) physical = atoi(colon);
 				else if (!strcmp(line, "core id")) core = atoi(colon);
 				if (physical >= 0 && core >= 0) {
@@ -336,6 +376,15 @@ static void detect_system_info(struct system_info *info)
 			if (npairs > 0) info->cpu_cores = npairs;
 		}
 	}
+	/* ARM servers commonly expose SMBIOS.  sysfs contains the same system
+	 * product value as `dmidecode -t system` without requiring root. */
+#if defined(__aarch64__) || defined(__arm__)
+	if (info->model[0] == '\0')
+		read_first_property("/sys/class/dmi/id/product_name", info->model,
+				    sizeof info->model);
+#endif
+	if (info->model[0] == '\0' && cpuinfo_hardware[0] != '\0')
+		snprintf(info->model, sizeof info->model, "%s", cpuinfo_hardware);
 	{
 		FILE *f = fopen("/proc/meminfo", "r");
 		char line[256]; long kb;
@@ -360,9 +409,11 @@ static void detect_system_info(struct system_info *info)
 #elif defined(__APPLE__)
 	{
 		size_t n = sizeof(info->cpu); uint64_t mem = 0; size_t mn = sizeof(mem);
+		size_t model_n = sizeof(info->model);
 		int cores = 0; size_t cn = sizeof(cores);
 		if (sysctlbyname("machdep.cpu.brand_string", info->cpu, &n, NULL, 0) != 0)
-			sysctlbyname("hw.model", info->cpu, &n, NULL, 0);
+			strncpy(info->cpu, FM_ARCH, sizeof info->cpu - 1);
+		sysctlbyname("hw.model", info->model, &model_n, NULL, 0);
 		if (sysctlbyname("hw.physicalcpu", &cores, &cn, NULL, 0) == 0) info->cpu_cores = cores;
 		if (sysctlbyname("hw.memsize", &mem, &mn, NULL, 0) == 0) info->memory_mb = (long)(mem / 1024 / 1024);
 	}
@@ -779,7 +830,7 @@ static int upload_results(const struct system_info *info, double score,
 			  uint64_t duration_ms)
 {
 	char host[256], port[16], path[512], payload[2048], request[4096];
-	char cpu[512], os[512], compiler[256], response[512];
+	char cpu[512], model[512], os[512], compiler[256], response[512];
 	const char *base = FM_API_BASE_URL, *p, *slash, *colon;
 	struct addrinfo hints, *addresses = NULL, *a;
 	SSL_CTX *tls_ctx = NULL;
@@ -812,13 +863,14 @@ static int upload_results(const struct system_info *info, double score,
 	}
 
 	json_escape(info->cpu, cpu, sizeof(cpu));
+	json_escape(info->model, model, sizeof(model));
 	json_escape(info->operating_system, os, sizeof(os));
 	json_escape(info->compiler, compiler, sizeof(compiler));
 	payload_len = snprintf(payload, sizeof(payload),
-		"{\"cpu\":\"%s\",\"cpu_cores\":%ld,\"cpu_threads\":%ld,"
+		"{\"cpu\":\"%s\",\"model\":\"%s\",\"cpu_cores\":%ld,\"cpu_threads\":%ld,"
 		"\"memory_mb\":%ld,\"operating_system\":\"%s\",\"compiler\":\"%s\","
 		"\"fossmark_version\":\"%s\",\"score\":%.2f,\"duration_ms\":%llu}",
-		cpu, info->cpu_cores, info->cpu_threads, info->memory_mb, os, compiler,
+		cpu, model, info->cpu_cores, info->cpu_threads, info->memory_mb, os, compiler,
 		FM_VERSION, score, (unsigned long long)duration_ms);
 	if (payload_len < 0 || (size_t)payload_len >= sizeof(payload)) return 0;
 	request_len = snprintf(request, sizeof(request),
@@ -891,6 +943,7 @@ static void print_header(const struct system_info *info)
 	printf("  fossbench %s - multi-core CPU benchmark\n", FM_VERSION);
 	printf("  ------------------------------------------------------------------\n");
 	printf("  CPU:       %s\n", info->cpu);
+	printf("  model:     %s\n", info->model[0] ? info->model : "unknown");
 	printf("  cores:     %ld physical / %ld threads\n", info->cpu_cores, info->cpu_threads);
 	printf("  memory:    %ld MB\n", info->memory_mb);
 	printf("  OS:        %s (%s)\n", info->operating_system, FM_ARCH);
