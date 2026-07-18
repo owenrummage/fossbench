@@ -1,21 +1,4 @@
-/*
- * test_kernels.c - correctness checks for the fossbench assembly kernels
- *
- * The benchmark's own best-of-N run guards against non-determinism, but a
- * kernel can be perfectly deterministic and still wrong. This file is the
- * "single C file to poke at and test with": it validates each kernel against
- * an independent reference or an invariant, so a mistake in the assembly is
- * caught here rather than silently skewing a score.
- *
- * Every check (except the single-threaded pointer-chase) is run concurrently
- * on all available cores. The kernels take their buffers as arguments and hold
- * no shared state, so a correct kernel must give identical, correct results no
- * matter how many copies run at once; a hidden global or a reentrancy bug would
- * survive a single-threaded run but fail here.
- *
- * Build: cc -O2 -pthread test_kernels.c fossbench.S -o test_kernels -lm
- * Exit status is 0 iff every check passes.
- */
+/* The actual tests. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,14 +23,7 @@ extern uint64_t fb_chase(void **ptrs, uint64_t steps);
 static int failures = 0;
 static int checks   = 0;
 
-/*
- * Concurrency plumbing. Each check runs on every core at once; the counters and
- * stdout are shared, so ok()/note() serialise on this lock. `fb_primary` is set
- * on exactly one thread per check (the one running on the main thread): it owns
- * the human-readable output so the "[ ok ]" lines and diagnostics appear once,
- * not once per core. Every thread still evaluates every assertion, so a failure
- * on any core - even a silent secondary - is reported and counted.
- */
+/* Concurrency plumbing. */
 static pthread_mutex_t io_lock = PTHREAD_MUTEX_INITIALIZER;
 static __thread int    fb_primary = 1;
 static long            fb_ncores  = 1;
@@ -64,14 +40,14 @@ static void ok(const char *what, int cond)
 			failures++;
 		}
 	} else if (!cond) {
-		/* a secondary core disagrees: surface it explicitly */
+		/* Show if another thread failed. */
 		printf("  [FAIL] %s (concurrent core)\n", what);
 		failures++;
 	}
 	pthread_mutex_unlock(&io_lock);
 }
 
-/* Diagnostic output that should appear once per check, not once per core. */
+/* Only print this once. */
 static void note(const char *fmt, ...)
 {
 	va_list ap;
@@ -85,8 +61,7 @@ static void note(const char *fmt, ...)
 	pthread_mutex_unlock(&io_lock);
 }
 
-/* Run `check` on every core simultaneously. The main thread is the primary;
- * fb_ncores-1 workers run the same check as silent secondaries. */
+/* Run the same check on every core. */
 static void *fb_worker(void *arg)
 {
 	void (*check)(void) = *(void (**)(void))arg;
@@ -112,14 +87,14 @@ static void parallel(void (*check)(void))
 		}
 	}
 
-	check();			/* primary runs on this thread */
+	check();			/* Run the first check here. */
 
 	for (i = 0; i < spawned; i++)
 		pthread_join(th[i], NULL);
 	free(th);
 }
 
-/* ---------- reference implementations ---------- */
+/* Small C versions used for comparison. */
 
 static uint64_t ref_prime_count(uint64_t limit)
 {
@@ -137,9 +112,7 @@ static uint64_t ref_prime_count(uint64_t limit)
 	return count;
 }
 
-/* A textbook scalar ChaCha20 block function, used both to anchor against the
- * RFC 8439 known-answer vector and to validate the NEON kernel block-for-block.
- * `out` receives 64 keystream bytes for the given counter and 12-byte nonce. */
+/* Basic ChaCha20 used to check the kernel. */
 #define ROTL32(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
 
 static void ref_chacha_block(uint32_t out_words[16], const uint8_t key[32],
@@ -180,12 +153,11 @@ static void ref_chacha_block(uint32_t out_words[16], const uint8_t key[32],
 		out_words[i] = x[i] + s[i];
 }
 
-/* ---------- checks ---------- */
+/* The actual tests. */
 
 static void check_int(void)
 {
-	/* determinism and non-triviality: the checksum must be stable and
-	 * must actually change with the iteration count */
+	/* The actual tests. */
 	uint64_t a = fb_int_math(1000);
 	uint64_t b = fb_int_math(1000);
 	uint64_t c = fb_int_math(2000);
@@ -217,7 +189,7 @@ static void check_primes(void)
 	note("         primes < %d: got %llu, expected %llu\n",
 	     LIM, (unsigned long long)got, (unsigned long long)ref);
 	ok("primes matches reference sieve", got == ref);
-	ok("primes < 10 == 4",  fb_primes(10, sieve) == 4);   /* 2,3,5,7 */
+	ok("primes < 10 == 4",  fb_primes(10, sieve) == 4);   /* The primes are 2, 3, 5, and 7. */
 	ok("primes < 2 == 0",   fb_primes(2, sieve) == 0);
 	free(sieve);
 }
@@ -244,8 +216,7 @@ static void check_compress(void)
 	uint64_t incompressible, compressible;
 	size_t i;
 
-	/* genuinely incompressible data (splitmix64 output): with no matches
-	 * to exploit, an LZ coder's output must be at least the input size */
+	/* Random data should not compress much. */
 	{
 		uint64_t st = 0x1234567890abcdefULL;
 		for (i = 0; i < N; i++) {
@@ -257,7 +228,7 @@ static void check_compress(void)
 	}
 	incompressible = fb_compress(src, N, ht);
 
-	/* all-zero data is maximally compressible: it must shrink hugely */
+	/* Zeros should compress a lot. */
 	memset(src, 0, N);
 	compressible = fb_compress(src, N, ht);
 
@@ -276,9 +247,7 @@ static void check_crypto(void)
 	uint8_t key[32];
 	size_t i;
 
-	/* (1) anchor the scalar reference to the RFC 8439 s.2.3.2 vector:
-	 *     key = 00,01,...,1f; counter = 1; nonce = 00,00,00,09,...,4a,...
-	 *     serialised keystream begins 10 f1 e7 e4. */
+	/* Check the C version with the RFC example. */
 	{
 		uint32_t w[16];
 		uint8_t rnonce[12] = {0,0,0,9, 0,0,0,0x4a, 0,0,0,0};
@@ -296,9 +265,7 @@ static void check_crypto(void)
 		   ks0[2] == 0xe7 && ks0[3] == 0xe4);
 	}
 
-	/* (2) validate the NEON kernel against that reference. The kernel
-	 *     hardwires nonce = 0 and starts the block counter at 0, so we
-	 *     compare its keystream to the reference block-for-block. */
+	/* Compare the kernel with the C version. */
 	{
 		uint8_t buf[128];
 		uint8_t zero_nonce[12] = {0};
@@ -307,7 +274,7 @@ static void check_crypto(void)
 
 		for (i = 0; i < 32; i++)
 			key[i] = (uint8_t)(i * 5 + 1);
-		memset(buf, 0, sizeof buf);		/* zeros -> raw keystream */
+		memset(buf, 0, sizeof buf);		/* Zeros give the keystream. */
 		fb_chacha20(buf, sizeof buf, key, 1);
 
 		ref_chacha_block(ref0, key, 0, zero_nonce);
@@ -327,7 +294,7 @@ static void check_crypto(void)
 		ok("NEON ChaCha20 matches scalar reference (2 blocks)", match);
 	}
 
-	/* (3) the cipher is a real XOR stream: applying it twice is identity */
+	/* Running it twice should restore the data. */
 	{
 		uint8_t plain[128], work[128], k2[32];
 		for (i = 0; i < 128; i++)
@@ -345,18 +312,17 @@ static void check_crypto(void)
 
 static void check_physics(void)
 {
-	/* two equal masses released from rest must accelerate toward each
-	 * other: symmetric, momentum-conserving, and bounded. */
+	/* The two bodies should move toward each other. */
 	double bodies[2 * 8] = {0};
 	double total_p;
 
-	bodies[0] = -1.0; bodies[3] = 1.0;	/* body 0 at x=-1, mass 1 */
-	bodies[8] =  1.0; bodies[11] = 1.0;	/* body 1 at x=+1, mass 1 */
+	bodies[0] = -1.0; bodies[3] = 1.0;	/* First body. */
+	bodies[8] =  1.0; bodies[11] = 1.0;	/* Second body. */
 
 	fb_physics(bodies, 2, 200);
 
-	/* velocities must be equal and opposite (Newton's third law) */
-	total_p = bodies[4] + bodies[12];	/* vx0 + vx1 */
+	/* The velocities should cancel out. */
+	total_p = bodies[4] + bodies[12];	/* Add both x velocities. */
 	note("         2-body: vx0=%.6f vx1=%.6f (sum should be ~0)\n",
 	     bodies[4], bodies[12]);
 	ok("physics conserves momentum", fabs(total_p) < 1e-9);
@@ -396,13 +362,12 @@ static void check_sort(void)
 	s = fb_sort(a, N);
 	ok("sort produces sorted output", is_sorted(a, N));
 
-	/* multiset is preserved: sort the reference with the C library and
-	 * compare element by element */
+	/* Compare it with the C library sort. */
 	qsort(b, N, sizeof(uint32_t), cmp_u32);
 	ok("sort is a permutation of the input",
 	   memcmp(a, b, N * sizeof(uint32_t)) == 0);
 
-	/* already-sorted input stays sorted and gives the same checksum */
+	/* The actual tests. */
 	{
 		uint64_t s2 = fb_sort(a, N);
 		ok("sort is idempotent on sorted data",
@@ -416,8 +381,7 @@ static void check_sort(void)
 
 static void check_chase(void)
 {
-	/* build a tiny 4-node cycle by hand and confirm the walk returns to
-	 * the start after exactly `n` steps (offset 0 relative to entry) */
+	/* Make a small pointer loop. */
 	void *nodes[4];
 
 	nodes[0] = &nodes[1];
@@ -425,11 +389,10 @@ static void check_chase(void)
 	nodes[2] = &nodes[3];
 	nodes[3] = &nodes[0];
 
-	/* 4 hops from &nodes[0] returns to &nodes[0]; fb_chase returns the
-	 * final pointer minus the starting pointer, so a full loop gives 0 */
+	/* Four hops should return to the start. */
 	ok("chase completes a full cycle", fb_chase(nodes, 4) == 0);
 	ok("chase(0) is zero",             fb_chase(nodes, 0) == 0);
-	/* one hop lands on &nodes[1], i.e. one pointer-width past the start */
+	/* One hop should move to the next pointer. */
 	ok("chase single hop offset",
 	   fb_chase(nodes, 1) == (uint64_t)((char *)&nodes[1] - (char *)&nodes[0]));
 }
@@ -453,7 +416,7 @@ int main(void)
 	printf("Encryption:\n");             parallel(check_crypto);
 	printf("Physics:\n");                parallel(check_physics);
 	printf("Sorting:\n");                parallel(check_sort);
-	/* the pointer chase is the single-threaded test: run it on one core */
+	/* Run the pointer test on one core. */
 	printf("Single-Threaded (chase):\n"); check_chase();
 
 	printf("\n=================================\n");

@@ -1,10 +1,4 @@
-/*
- * Portable kernel backend for big-endian PowerPC.
- *
- * Keeping this backend in C lets the compiler implement 64-bit arguments and
- * returns according to the platform ABI.  All byte-oriented formats
- * are decoded explicitly, so the code is correct on big-endian systems.
- */
+/* PowerPC kernel code. */
 #include <math.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -80,9 +74,7 @@ static uint64_t fb_simd_scalar(uint64_t iters, void *memory)
 #endif
 
 #if defined(__powerpc64__)
-/* The PowerPC 970 in every iMac G5 implements AltiVec.  Using GCC's vector
- * type here lets the compiler handle whichever PPC64 ELF ABI the system uses;
- * both PPC64 ABIs differ from the PPC32 assembly convention below. */
+/* The iMac G5 has AltiVec. */
 typedef uint32_t fb_vec_u32 __attribute__((vector_size(16)));
 
 uint64_t fb_simd(uint64_t iters, void *memory)
@@ -110,8 +102,7 @@ uint64_t fb_simd(uint64_t iters, void *memory)
 	return sum;
 }
 #else
-/* These are kept in fossbench_ppc32_ext.S so this translation unit, and thus
- * the executable's default code path, only requires baseline PPC32. */
+/* The optional PowerPC code is in the assembly file. */
 extern void fb_simd_ps_kernel(uint64_t iters, void *memory);
 extern void fb_simd_vsx_kernel(uint64_t iters, void *memory);
 extern void fb_simd_altivec_kernel(uint64_t iters, void *memory);
@@ -147,8 +138,7 @@ static int device_is_nintendo(void)
 
 static fb_simd_kernel detect_simd_kernel(void)
 {
-	/* Linux exposes these in AT_HWCAP on both 32- and 64-bit PowerPC.
-	 * Spell out the ABI values instead of depending on kernel-only headers. */
+	/* Linux tells us which PowerPC features are available. */
 #if defined(__linux__) && defined(AT_HWCAP)
 	const unsigned long hwcap = getauxval(AT_HWCAP);
 	const unsigned long has_altivec = 0x10000000UL;

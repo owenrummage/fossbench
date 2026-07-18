@@ -1,5 +1,5 @@
 /* Optional PPC32 extended-instruction kernels.  No instruction in this file
- * is reached until fossbench_ppc32.c has checked the device tree or AT_HWCAP.
+ * is reached until fossbench-powerpc.c has checked the device tree or AT_HWCAP.
  * Arguments use the PPC32 ABI: iters in r3:r4 and memory in r5. */
 
 	.text

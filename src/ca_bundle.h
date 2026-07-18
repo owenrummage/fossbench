@@ -1,26 +1,5 @@
-/*
- * Embedded CA trust bundle (fallback for upload_results() TLS).
- *
- * Statically linking against a machine's OpenSSL is not enough to verify
- * TLS certificates on an arbitrary target machine: SSL_CTX_set_default_verify_paths()
- * only works if OpenSSL's compiled-in default CA directory/file happens to exist on
- * the machine running the binary - a path baked in wherever OpenSSL itself was built,
- * not the release binary. That almost never matches the end user's machine (macOS has
- * no such path at all outside Homebrew; Linux distros disagree on the location), so
- * uploads failed with a TLS/certificate error on nearly every machine except the one
- * that built the release binaries.
- *
- * This bundle is carried as a fallback trust source so upload_results() can verify
- * fossbench.net's certificate chain unconditionally, without relying on the host having
- * a usable system trust store. It is tried in addition to (not instead of) the system's
- * own default verify paths, so locally-trusted/corporate CAs still work where present.
- *
- * Contents: the Mozilla CA root program's included/trusted certificate set, as shipped
- * by the ca-certificates-mozilla distro package (/etc/ssl/certs/ca-certificates.crt),
- * the same root program curl/Go/Python(certifi) bundle for the identical reason.
- * Regenerate by re-running the script that produced this file against a current
- * ca-certificates package; do this roughly yearly as roots rotate.
- */
+/* Backup certificates for uploads.
+ * These come from Mozilla's CA list. */
 
 #ifndef FB_CA_BUNDLE_H
 #define FB_CA_BUNDLE_H

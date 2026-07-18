@@ -1,5 +1,5 @@
 /*
- * fossbench.S - AArch64 CPU benchmark kernels
+ * fossbench-arm64.S - AArch64 CPU benchmark kernels
  *
  * OS-independent: contains no syscalls, no libc calls, no relocations against
  * external data. Every routine is a pure function of its arguments under the
