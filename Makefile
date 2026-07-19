@@ -118,23 +118,23 @@ windows-amd64: $(DIST)/fossbench-windows-amd64.exe
 windows-i386: $(DIST)/fossbench-windows-i386.exe
 
 $(DIST)/fossbench-linux-arm64: $(DRIVER) $(ASM_ARM64) | $(DIST)
-	$(CC_ARM64) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_ARM64) $(LDLIBS)
+	$(CC_ARM64) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) -static $(LDFLAGS) -o $@ $(DRIVER) $(ASM_ARM64) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossbench-linux-amd64: $(DRIVER) $(ASM_AMD64) | $(DIST)
-	$(CC_AMD64) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_AMD64) $(LDLIBS)
+	$(CC_AMD64) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) -static $(LDFLAGS) -o $@ $(DRIVER) $(ASM_AMD64) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossbench-linux-i386: $(DRIVER) $(ASM_I386) | $(DIST)
-	$(CC_I386) -m32 -march=pentium4 -fno-pie -no-pie $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_I386) $(LDLIBS)
+	$(CC_I386) -m32 -march=pentium4 -fno-pie -no-pie $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) -static $(LDFLAGS) -o $@ $(DRIVER) $(ASM_I386) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossbench-linux-ppc32be: $(DRIVER) $(ASM_PPC32) | $(DIST)
-	$(CC_PPC32BE) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_PPC32) $(LDLIBS)
+	$(CC_PPC32BE) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) -static $(LDFLAGS) -o $@ $(DRIVER) $(ASM_PPC32) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossbench-linux-ppc64be: $(DRIVER) $(ASM_PPC64) | $(DIST)
-	$(CC_PPC64BE) -mcpu=970 -maltivec $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_PPC64) $(LDLIBS)
+	$(CC_PPC64BE) -mcpu=970 -maltivec $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) -static $(LDFLAGS) -o $@ $(DRIVER) $(ASM_PPC64) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossbench-macos-arm64: $(DRIVER) $(ASM_ARM64) | $(DIST)
