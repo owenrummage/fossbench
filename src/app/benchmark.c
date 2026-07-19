@@ -25,6 +25,7 @@
 #endif
 #if defined(__APPLE__)
 #  include <sys/types.h>
+#  include <sys/sysctl.h>
 #  include <mach/mach_time.h>
 #  include <mach/mach.h>
 #endif

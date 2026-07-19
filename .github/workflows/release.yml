@@ -26,8 +26,6 @@ jobs:
 
   build:
     name: Build ${{ matrix.target }}
-    permissions:
-      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -157,11 +155,6 @@ jobs:
               tail -80 "$build_log"
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
-            git config user.name github-actions
-            git config user.email github-actions@github.com
-            diagnostic_tag="diagnostic-${{ matrix.target }}-${{ github.run_id }}"
-            git tag -f -F "$build_log" "$diagnostic_tag"
-            git push --force origin "refs/tags/$diagnostic_tag"
             exit 1
           fi
           cat "$build_log"
