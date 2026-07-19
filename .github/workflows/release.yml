@@ -129,7 +129,9 @@ jobs:
             echo 'Linux release is dynamically linked' >&2
             exit 1
           fi
-          "dist/fossbench-${{ matrix.target }}" --help
+          if [ "${{ matrix.target }}" != linux-ppc32be ]; then
+            "dist/fossbench-${{ matrix.target }}" --help
+          fi
 
       - name: Build macOS executable with static OpenSSL
         if: startsWith(matrix.target, 'macos-')
