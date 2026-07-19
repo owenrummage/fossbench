@@ -148,8 +148,12 @@ jobs:
               TLS_CFLAGS="-I$GITHUB_WORKSPACE/openssl-static/include" \
               TLS_LDLIBS="$OPENSSL_LIBDIR/libssl.a $OPENSSL_LIBDIR/libcrypto.a" \
               2>&1 | tee "$build_log"; then
-            message="$(tail -40 "$build_log" | tr '\n' ' ')"
-            echo "::error title=macOS build failed::$message"
+            {
+              echo '## macOS build failure'
+              echo '```text'
+              tail -80 "$build_log"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
           if otool -L "dist/fossbench-${{ matrix.target }}" | grep -E 'lib(ssl|crypto)'; then
