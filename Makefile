@@ -10,7 +10,8 @@ LDLIBS  ?= -lm $(TLS_LDLIBS)
 PTHREAD := -pthread
 
 DIST      := dist
-DRIVER    := src/main.c src/app/benchmark.c
+DRIVER    := src/main.c src/app/benchmark.c src/app/hw_detect.c
+DRIVER_DEPS := src/app/benchmark.h src/app/hw_detect.h src/app/upload.c
 ASM_ARM64 := src/kernels/fossbench-arm64.S
 ASM_AMD64 := src/kernels/fossbench-amd64.S
 ASM_I386  := src/kernels/fossbench-i386.S
@@ -117,41 +118,41 @@ macos-amd64: $(DIST)/fossbench-macos-amd64
 windows-amd64: $(DIST)/fossbench-windows-amd64.exe
 windows-i386: $(DIST)/fossbench-windows-i386.exe
 
-$(DIST)/fossbench-linux-arm64: $(DRIVER) $(ASM_ARM64) | $(DIST)
+$(DIST)/fossbench-linux-arm64: $(DRIVER) $(DRIVER_DEPS) $(ASM_ARM64) | $(DIST)
 	$(CC_ARM64) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_ARM64) $(LDLIBS)
 	@echo "built $@"
 
-$(DIST)/fossbench-linux-amd64: $(DRIVER) $(ASM_AMD64) | $(DIST)
+$(DIST)/fossbench-linux-amd64: $(DRIVER) $(DRIVER_DEPS) $(ASM_AMD64) | $(DIST)
 	$(CC_AMD64) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_AMD64) $(LDLIBS)
 	@echo "built $@"
 
-$(DIST)/fossbench-linux-i386: $(DRIVER) $(ASM_I386) | $(DIST)
+$(DIST)/fossbench-linux-i386: $(DRIVER) $(DRIVER_DEPS) $(ASM_I386) | $(DIST)
 	$(CC_I386) -m32 -march=pentium4 -fno-pie -no-pie $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_I386) $(LDLIBS)
 	@echo "built $@"
 
-$(DIST)/fossbench-linux-ppc32be: $(DRIVER) $(ASM_PPC32) | $(DIST)
+$(DIST)/fossbench-linux-ppc32be: $(DRIVER) $(DRIVER_DEPS) $(ASM_PPC32) | $(DIST)
 	$(CC_PPC32BE) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_PPC32) $(LDLIBS)
 	@echo "built $@"
 
-$(DIST)/fossbench-linux-ppc64be: $(DRIVER) $(ASM_PPC64) | $(DIST)
+$(DIST)/fossbench-linux-ppc64be: $(DRIVER) $(DRIVER_DEPS) $(ASM_PPC64) | $(DIST)
 	$(CC_PPC64BE) -mcpu=970 -maltivec $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_PPC64) $(LDLIBS)
 	@echo "built $@"
 
-$(DIST)/fossbench-macos-arm64: $(DRIVER) $(ASM_ARM64) | $(DIST)
+$(DIST)/fossbench-macos-arm64: $(DRIVER) $(DRIVER_DEPS) $(ASM_ARM64) | $(DIST)
 	$(CC_MACOS_ARM64) -arch arm64 $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_ARM64) $(LDLIBS)
 	@echo "built $@"
 
-$(DIST)/fossbench-macos-amd64: $(DRIVER) $(ASM_AMD64) | $(DIST)
+$(DIST)/fossbench-macos-amd64: $(DRIVER) $(DRIVER_DEPS) $(ASM_AMD64) | $(DIST)
 	MACOSX_DEPLOYMENT_TARGET=$(MACOS_AMD64_MIN) $(CC_MACOS_AMD64) -arch x86_64 -mmacosx-version-min=$(MACOS_AMD64_MIN) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -Wl,-no_fixup_chains -o $@ $(DRIVER) $(ASM_AMD64) $(LDLIBS)
 	@echo "built $@"
 
 # Windows builds are static and use WinHTTP.
-$(DIST)/fossbench-windows-amd64.exe: $(DRIVER) $(ASM_AMD64) | $(DIST)
-	$(CC_WINDOWS_AMD64) $(CFLAGS) $(PTHREAD) -static -o $@ $(DRIVER) $(ASM_AMD64) -lm -lwinhttp
+$(DIST)/fossbench-windows-amd64.exe: $(DRIVER) $(DRIVER_DEPS) $(ASM_AMD64) | $(DIST)
+	$(CC_WINDOWS_AMD64) $(CFLAGS) $(PTHREAD) -static -o $@ $(DRIVER) $(ASM_AMD64) -lm -lwinhttp -ladvapi32
 	@echo "built $@"
 
-$(DIST)/fossbench-windows-i386.exe: $(DRIVER) $(ASM_I386) | $(DIST)
-	$(CC_WINDOWS_I386) -march=pentium4 $(CFLAGS) $(PTHREAD) -static -o $@ $(DRIVER) $(ASM_I386) -lm -lwinhttp
+$(DIST)/fossbench-windows-i386.exe: $(DRIVER) $(DRIVER_DEPS) $(ASM_I386) | $(DIST)
+	$(CC_WINDOWS_I386) -march=pentium4 $(CFLAGS) $(PTHREAD) -static -o $@ $(DRIVER) $(ASM_I386) -lm -lwinhttp -ladvapi32
 	@echo "built $@"
 
 # Add a native rule if one was not already made above.
@@ -177,7 +178,7 @@ ifeq ($(OSNAME)-$(HOST_ARCHNAME),macos-amd64)
 NATIVE_HAS_RULE := yes
 endif
 ifneq ($(NATIVE_HAS_RULE),yes)
-$(NATIVE_BIN): $(DRIVER) $(HOST_KERNEL) | $(DIST)
+$(NATIVE_BIN): $(DRIVER) $(DRIVER_DEPS) $(HOST_KERNEL) | $(DIST)
 	$(CC) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(HOST_KERNEL) $(LDLIBS)
 	@echo "built $@"
 endif

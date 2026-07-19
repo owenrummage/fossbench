@@ -8,16 +8,13 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <ctype.h>
-#include <errno.h>
 
 #include "benchmark.h"
+#include "hw_detect.h"
 #if defined(__linux__)
 #  include <dirent.h>
 #endif
 
-#if !defined(_WIN32)
-#  include <sys/utsname.h>
-#endif
 #if !defined(_WIN32) && !defined(FB_NO_UPLOAD)
 #  include <sys/socket.h>
 #  include <netdb.h>
@@ -28,59 +25,37 @@
 #endif
 #if defined(__APPLE__)
 #  include <sys/types.h>
-#  include <sys/sysctl.h>
 #  include <mach/mach_time.h>
 #  include <mach/mach.h>
-#endif
-#if defined(_WIN32) && (defined(__i386__) || defined(__x86_64__))
-#  include <cpuid.h>
 #endif
 
 /* The server URL can be changed when building. */
 #ifndef FB_API_BASE_URL
 #  define FB_API_BASE_URL "https://fossbench.net"
 #endif
-#define FB_VERSION "0.2.0"
-
-/* Names used in the header. */
-
-#if defined(_WIN32)
-#  define FB_OS "Windows"
-#elif defined(__APPLE__)
-#  define FB_OS "macOS"
-#elif defined(__linux__)
-#  define FB_OS "Linux"
-#else
-#  define FB_OS "POSIX"
-#endif
+#define FB_VERSION "0.2.1"
 
 #if defined(__aarch64__) || defined(_M_ARM64)
-#  define FB_ARCH "ARM64"
 #  define D_INT  "64-bit ALU: madd, umulh, udiv, bitops"
 #  define D_FP   "double: fmadd, fdiv, fsqrt"
 #  define D_SIMD "NEON ASIMD: 128-bit integer + float"
 #elif defined(__x86_64__) || defined(_M_X64)
-#  define FB_ARCH "x86-64"
 #  define D_INT  "64-bit ALU: imul, mul, div, bitops"
 #  define D_FP   "double: mulsd/addsd, divsd, sqrtsd"
 #  define D_SIMD "SSE2: 128-bit integer + float"
 #elif defined(__i386__) || defined(_M_IX86)
-#  define FB_ARCH "x86 32-bit"
 #  define D_INT  "Pentium 4 integer ALU and software 64-bit arithmetic"
 #  define D_FP   "x87 scalar double-precision floating point"
 #  define D_SIMD "SSE2: 128-bit integer vectors"
 #elif defined(__powerpc64__)
-#  define FB_ARCH "PowerPC 64-bit big-endian"
 #  define D_INT  "64-bit PowerPC integer ALU"
 #  define D_FP   "PowerPC scalar double-precision floating point"
 #  define D_SIMD "AltiVec: 128-bit integer vectors (PowerPC 970)"
 #elif defined(__powerpc__)
-#  define FB_ARCH "PowerPC 32-bit big-endian"
 #  define D_INT  "PPC32 integer ALU and software 64-bit arithmetic"
 #  define D_FP   "PowerPC scalar double-precision floating point"
 #  define D_SIMD "runtime-selected PS, VSX, AltiVec, or scalar"
 #else
-#  define FB_ARCH "unknown"
 #  define D_INT  "64-bit integer ALU"
 #  define D_FP   "double-precision FP"
 #  define D_SIMD "128-bit SIMD: integer + float"
@@ -354,209 +329,6 @@ static uint8_t  *g_simd_src;	/* pristine NEON seed, copied per-core. */
 static double   *g_bodies_src;	/* pristine initial conditions. */
 static uint32_t *g_sort_src;	/* pristine unsorted data. */
 
-struct system_info {
-	char cpu[256];
-	char model[256];
-	char operating_system[256];
-	char compiler[128];
-	char kernel[128];
-	long cpu_cores;
-	long cpu_threads;
-	long memory_mb;
-};
-
-static void trim(char *s)
-{
-	char *p = s;
-	size_t n;
-	while (isspace((unsigned char)*p)) p++;
-	if (p != s) memmove(s, p, strlen(p) + 1);
-	n = strlen(s);
-	while (n && isspace((unsigned char)s[n - 1])) s[--n] = '\0';
-}
-
-/* Read the first device tree value. */
-static int read_first_property(const char *path, char *dst, size_t cap)
-{
-	FILE *f;
-	size_t n, i;
-
-	if (cap == 0)
-		return 0;
-	f = fopen(path, "rb");
-	if (f == NULL)
-		return 0;
-	n = fread(dst, 1, cap - 1, f);
-	fclose(f);
-	for (i = 0; i < n && dst[i] != '\0' && dst[i] != '\n' && dst[i] != '\r'; i++)
-		if ((unsigned char)dst[i] < 0x20)
-			dst[i] = ' ';
-	dst[i] = '\0';
-	trim(dst);
-	return dst[0] != '\0';
-}
-
-static void detect_system_info(struct system_info *info)
-{
-#if defined(__linux__)
-	char cpuinfo_hardware[sizeof info->model] = "";
-#endif
-	memset(info, 0, sizeof(*info));
-	info->cpu_threads = g_ncores;
-	info->cpu_cores = g_ncores;
-	strncpy(info->cpu, FB_ARCH, sizeof(info->cpu) - 1);
-	strncpy(info->operating_system, FB_OS, sizeof(info->operating_system) - 1);
-#if defined(__clang__)
-	snprintf(info->compiler, sizeof(info->compiler), "Clang %s", __clang_version__);
-#elif defined(__GNUC__)
-	snprintf(info->compiler, sizeof(info->compiler), "GCC %s", __VERSION__);
-#elif defined(_MSC_VER)
-	snprintf(info->compiler, sizeof(info->compiler), "MSVC %d", _MSC_VER);
-#else
-	strncpy(info->compiler, "Unknown", sizeof(info->compiler) - 1);
-#endif
-
-#if defined(__linux__)
-	{
-		struct utsname u;
-		if (uname(&u) == 0)
-			snprintf(info->kernel, sizeof(info->kernel), "%s %s", u.sysname, u.release);
-	}
-	{
-		static const char *const model_paths[] = {
-			"/sys/firmware/devicetree/base/compatible",
-			"/sys/firmware/devicetree/base/model",
-			"/proc/device-tree/compatible"
-		};
-		unsigned i;
-		for (i = 0; i < sizeof model_paths / sizeof model_paths[0]; i++)
-			if (read_first_property(model_paths[i], info->model,
-						 sizeof info->model))
-				break;
-	}
-	{
-		FILE *f = fopen("/proc/cpuinfo", "r");
-		char line[512];
-		int pairs[1024][2], npairs = 0, physical = -1, core = -1;
-		if (f) {
-			while (fgets(line, sizeof(line), f)) {
-				char *colon = strchr(line, ':');
-				if (!colon) continue;
-				*colon++ = '\0'; trim(line); trim(colon);
-				if ((!strcmp(line, "model name") || !strcmp(line, "Processor") ||
-				     !strcmp(line, "cpu")) && info->cpu[0] && !strcmp(info->cpu, FB_ARCH))
-					strncpy(info->cpu, colon, sizeof(info->cpu) - 1);
-				else if (!strcmp(line, "Hardware") && cpuinfo_hardware[0] == '\0')
-					strncpy(cpuinfo_hardware, colon, sizeof cpuinfo_hardware - 1);
-				else if (!strcmp(line, "physical id")) physical = atoi(colon);
-				else if (!strcmp(line, "core id")) core = atoi(colon);
-				if (physical >= 0 && core >= 0) {
-					int i, seen = 0;
-					for (i = 0; i < npairs; i++)
-						if (pairs[i][0] == physical && pairs[i][1] == core) seen = 1;
-					if (!seen && npairs < 1024) { pairs[npairs][0] = physical; pairs[npairs++][1] = core; }
-					physical = core = -1;
-				}
-			}
-			fclose(f);
-			if (npairs > 0) info->cpu_cores = npairs;
-		}
-	}
-	/* Try the system files if CPU info is missing. */
-#if defined(__aarch64__) || defined(__arm__)
-	if (info->model[0] == '\0')
-		read_first_property("/sys/class/dmi/id/product_name", info->model,
-				    sizeof info->model);
-#endif
-	if (info->model[0] == '\0' && cpuinfo_hardware[0] != '\0')
-		snprintf(info->model, sizeof info->model, "%s", cpuinfo_hardware);
-	{
-		FILE *f = fopen("/proc/meminfo", "r");
-		char line[256]; long kb;
-		if (f) {
-			while (fgets(line, sizeof(line), f)) {
-				if (sscanf(line, "MemTotal: %ld kB", &kb) == 1) {
-					info->memory_mb = kb / 1024;
-					break;
-				}
-			}
-			fclose(f);
-		}
-	}
-	{
-		FILE *f = fopen("/etc/os-release", "r"); char line[512];
-		if (f) { while (fgets(line, sizeof(line), f)) if (!strncmp(line, "PRETTY_NAME=", 12)) {
-			char *v = line + 12; trim(v);
-			if (v[0] == '\"') { memmove(v, v + 1, strlen(v)); if (strlen(v) && v[strlen(v)-1] == '\"') v[strlen(v)-1] = '\0'; }
-			snprintf(info->operating_system, sizeof(info->operating_system), "%s", v); break;
-		} fclose(f); }
-	}
-#elif defined(__APPLE__)
-	{
-		size_t n = sizeof(info->cpu); uint64_t mem = 0; size_t mn = sizeof(mem);
-		size_t model_n = sizeof(info->model);
-		int cores = 0; size_t cn = sizeof(cores);
-		if (sysctlbyname("machdep.cpu.brand_string", info->cpu, &n, NULL, 0) != 0)
-			strncpy(info->cpu, FB_ARCH, sizeof info->cpu - 1);
-		sysctlbyname("hw.model", info->model, &model_n, NULL, 0);
-		if (sysctlbyname("hw.physicalcpu", &cores, &cn, NULL, 0) == 0) info->cpu_cores = cores;
-		if (sysctlbyname("hw.memsize", &mem, &mn, NULL, 0) == 0) info->memory_mb = (long)(mem / 1024 / 1024);
-	}
-	{
-		char product[64] = ""; size_t pn = sizeof(product);
-		struct utsname u;
-		if (sysctlbyname("kern.osproductversion", product, &pn, NULL, 0) == 0)
-			snprintf(info->operating_system, sizeof(info->operating_system), "macOS %s", product);
-		if (uname(&u) == 0)
-			snprintf(info->kernel, sizeof(info->kernel), "%s %s", u.sysname, u.release);
-	}
-#elif defined(_WIN32)
-	{
-		MEMORYSTATUSEX ms;
-		ms.dwLength = sizeof(ms);
-		if (GlobalMemoryStatusEx(&ms))
-			info->memory_mb = (long)(ms.ullTotalPhys / 1024 / 1024);
-	}
-	{
-		OSVERSIONINFOEXA version;
-		typedef LONG (WINAPI *rtl_get_version_fn)(OSVERSIONINFOEXA *);
-		rtl_get_version_fn rtl_get_version = (rtl_get_version_fn)(void *)
-			GetProcAddress(GetModuleHandleA("ntdll.dll"), "RtlGetVersion");
-		memset(&version, 0, sizeof(version)); version.dwOSVersionInfoSize = sizeof(version);
-		if (rtl_get_version && rtl_get_version(&version) == 0) {
-			snprintf(info->operating_system, sizeof(info->operating_system),
-				 "Windows %lu.%lu (build %lu)", (unsigned long)version.dwMajorVersion,
-				 (unsigned long)version.dwMinorVersion, (unsigned long)version.dwBuildNumber);
-			snprintf(info->kernel, sizeof(info->kernel), "NT %lu.%lu build %lu",
-				 (unsigned long)version.dwMajorVersion, (unsigned long)version.dwMinorVersion,
-				 (unsigned long)version.dwBuildNumber);
-		}
-	}
-#if defined(__i386__) || defined(__x86_64__)
-	{
-		/* Read the CPU name from CPUID. */
-		unsigned eax, ebx, ecx, edx, max_ext;
-		char brand[49];
-		int i;
-		__cpuid(0x80000000, eax, ebx, ecx, edx);
-		max_ext = eax;
-		if (max_ext >= 0x80000004) {
-			for (i = 0; i < 3; i++) {
-				__cpuid(0x80000002u + (unsigned)i, eax, ebx, ecx, edx);
-				memcpy(brand + i * 16 + 0,  &eax, 4);
-				memcpy(brand + i * 16 + 4,  &ebx, 4);
-				memcpy(brand + i * 16 + 8,  &ecx, 4);
-				memcpy(brand + i * 16 + 12, &edx, 4);
-			}
-			brand[48] = '\0';
-			trim(brand);
-			if (brand[0])
-				snprintf(info->cpu, sizeof(info->cpu), "%s", brand);
-		}
-	}
-#endif
-#endif
-}
 
 /* Synthesise a compressible corpus. */
 static void build_corpus(uint8_t *buf, size_t len)
@@ -972,7 +744,7 @@ static void print_header(const struct system_info *info)
 	printf("  model:     %s\n", info->model[0] ? info->model : "unknown");
 	printf("  cores:     %ld physical / %ld threads\n", info->cpu_cores, info->cpu_threads);
 	printf("  memory:    %ld MB\n", info->memory_mb);
-	printf("  OS:        %s (%s)\n", info->operating_system, FB_ARCH);
+	printf("  OS:        %s (%s)\n", info->operating_system, hw_arch_name());
 	printf("  kernel:    %s\n", info->kernel[0] ? info->kernel : "unknown");
 	printf("  compiler:  %s\n", info->compiler);
 	printf("\n");
@@ -993,17 +765,8 @@ int fossbench_run(int verbose, int upload_mode, int system_check)
 	uint64_t duration_ms;
 	size_t i;
 
-	{
-#if defined(_WIN32)
-		SYSTEM_INFO si;
-		GetSystemInfo(&si);
-		long n = (long)si.dwNumberOfProcessors;
-#else
-		long n = sysconf(_SC_NPROCESSORS_ONLN);
-#endif
-		g_ncores = n > 0 ? n : 1;
-	}
-	detect_system_info(&system_info);
+	hw_detect_system(&system_info);
+	g_ncores = system_info.cpu_threads;
 	memset(&background, 0, sizeof(background));
 	background.available_memory_mb = background.process_count = -1;
 	if (system_check) {
