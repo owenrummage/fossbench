@@ -14,9 +14,8 @@ DRIVER    := src/main.c src/app/benchmark.c
 ASM_ARM64 := src/kernels/fossbench-arm64.S
 ASM_AMD64 := src/kernels/fossbench-amd64.S
 ASM_I386  := src/kernels/fossbench-i386.S
-SRC_PPC32 := src/kernels/fossbench-powerpc.c
-ASM_PPC32 := src/kernels/fossbench-ppc32-ext.S
-SRC_PPC64 := src/kernels/fossbench-powerpc.c
+ASM_PPC32 := src/kernels/fossbench-ppc32be.S
+ASM_PPC64 := src/kernels/fossbench-ppc64be.S
 
 # Figure out the host CPU.
 HOST_ARCH := $(shell uname -m)
@@ -31,10 +30,10 @@ else ifneq (,$(filter i386 i486 i586 i686 x86,$(HOST_ARCH)))
 	HOST_KERNEL   := $(ASM_I386)
 else ifneq (,$(filter ppc powerpc ppc32 powerpc32,$(HOST_ARCH)))
 	HOST_ARCHNAME := ppc32be
-	HOST_KERNEL   := $(SRC_PPC32) $(ASM_PPC32)
+	HOST_KERNEL   := $(ASM_PPC32)
 else ifneq (,$(filter ppc64 powerpc64,$(HOST_ARCH)))
 	HOST_ARCHNAME := ppc64be
-	HOST_KERNEL   := $(SRC_PPC64)
+	HOST_KERNEL   := $(ASM_PPC64)
 else
 	HOST_ARCHNAME := $(HOST_ARCH)
 $(error unsupported host architecture '$(HOST_ARCH)')
@@ -130,12 +129,12 @@ $(DIST)/fossbench-linux-i386: $(DRIVER) $(ASM_I386) | $(DIST)
 	$(CC_I386) -m32 -march=pentium4 -fno-pie -no-pie $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_I386) $(LDLIBS)
 	@echo "built $@"
 
-$(DIST)/fossbench-linux-ppc32be: $(DRIVER) $(SRC_PPC32) $(ASM_PPC32) | $(DIST)
-	$(CC_PPC32BE) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(SRC_PPC32) $(ASM_PPC32) $(LDLIBS)
+$(DIST)/fossbench-linux-ppc32be: $(DRIVER) $(ASM_PPC32) | $(DIST)
+	$(CC_PPC32BE) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_PPC32) $(LDLIBS)
 	@echo "built $@"
 
-$(DIST)/fossbench-linux-ppc64be: $(DRIVER) $(SRC_PPC64) | $(DIST)
-	$(CC_PPC64BE) -mcpu=970 -maltivec $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(SRC_PPC64) $(LDLIBS)
+$(DIST)/fossbench-linux-ppc64be: $(DRIVER) $(ASM_PPC64) | $(DIST)
+	$(CC_PPC64BE) -mcpu=970 -maltivec $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_PPC64) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossbench-macos-arm64: $(DRIVER) $(ASM_ARM64) | $(DIST)

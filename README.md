@@ -153,7 +153,7 @@ src/app/upload.c                   API payload and network transport
 src/kernels/fossbench-arm64.S      ARM64 kernels
 src/kernels/fossbench-amd64.S      x86-64 kernels
 src/kernels/fossbench-i386.S       i386 kernels
-src/kernels/fossbench-powerpc.c    PowerPC kernels
-src/kernels/fossbench-ppc32-ext.S  optional PPC32 extended kernels
+src/kernels/fossbench-ppc32be.S    32-bit big-endian PowerPC kernels
+src/kernels/fossbench-ppc64be.S    64-bit big-endian PowerPC kernels
 src/test_kernels.c                 kernel correctness suite
 ```
