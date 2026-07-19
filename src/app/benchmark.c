@@ -16,8 +16,10 @@
 #endif
 
 #if !defined(_WIN32)
-#  include <sys/socket.h>
 #  include <sys/utsname.h>
+#endif
+#if !defined(_WIN32) && !defined(FB_NO_UPLOAD)
+#  include <sys/socket.h>
 #  include <netdb.h>
 #  include <openssl/ssl.h>
 #  include <openssl/err.h>
@@ -38,7 +40,7 @@
 #ifndef FB_API_BASE_URL
 #  define FB_API_BASE_URL "https://fossbench.net"
 #endif
-#define FB_VERSION "0.1.6"
+#define FB_VERSION "0.2.0"
 
 /* Names used in the header. */
 
@@ -142,6 +144,7 @@ extern uint64_t fb_chase(void **ptrs, uint64_t steps);
 #define SIMD_BUF	256			/* Small SIMD buffer. */
 #define NBODY_N		512			/* Number of physics bodies. */
 #define SORT_N		(1u << 20)		/* Number of values to sort. */
+#define STREAM_N	(1u << 20)		/* 12 MiB triad working set. */
 /* Use less memory on 32-bit PowerPC. */
 #if defined(__powerpc__) && !defined(__powerpc64__)
 #  define CHASE_NODES	(1u << 19)		/* Smaller pointer loop. */
@@ -163,6 +166,7 @@ extern uint64_t fb_chase(void **ptrs, uint64_t steps);
 
 /* Rates from the reference machine. */
 #define FB_REF_INT		3086.0		/* Reference rate. */
+#define FB_REF_INT32		3086.0		/* Common 32-bit integer reference. */
 #define FB_REF_FP		1682.0		/* Reference rate. */
 #define FB_REF_PRIMES		812.0		/* Reference rate. */
 #define FB_REF_SIMD		6576.0		/* Reference rate. */
@@ -171,17 +175,20 @@ extern uint64_t fb_chase(void **ptrs, uint64_t steps);
 #define FB_REF_PHYSICS		631.0		/* Reference rate. */
 #define FB_REF_SORT		363.0		/* Reference rate. */
 #define FB_REF_CHASE		79.0		/* Memory test reference. */
+#define FB_REF_STREAM		3200.0		/* STREAM triad reference rate. */
 
 /* How much each test counts. */
-#define FB_WEIGHT_INT		20.0		/* Score weight. */
-#define FB_WEIGHT_CHASE		16.0		/* Score weight. */
-#define FB_WEIGHT_COMPRESS	14.0		/* Score weight. */
-#define FB_WEIGHT_SORT		12.0		/* Score weight. */
-#define FB_WEIGHT_SIMD		11.0		/* Score weight. */
-#define FB_WEIGHT_FP		9.0		/* Score weight. */
+#define FB_WEIGHT_INT		3.0		/* Wide integer mix. */
+#define FB_WEIGHT_INT32		10.0		/* Common native-width integer work. */
+#define FB_WEIGHT_CHASE		10.0		/* Random-access latency. */
+#define FB_WEIGHT_STREAM	15.0		/* Sustained memory bandwidth. */
+#define FB_WEIGHT_COMPRESS	12.0		/* Score weight. */
+#define FB_WEIGHT_SORT		8.0		/* Score weight. */
+#define FB_WEIGHT_SIMD		16.0		/* Vector and packed arithmetic. */
+#define FB_WEIGHT_FP		10.0		/* Score weight. */
 #define FB_WEIGHT_CRYPTO	8.0		/* Score weight. */
-#define FB_WEIGHT_PRIMES	6.0		/* Score weight. */
-#define FB_WEIGHT_PHYSICS	4.0		/* Score weight. */
+#define FB_WEIGHT_PRIMES	5.0		/* Score weight. */
+#define FB_WEIGHT_PHYSICS	3.0		/* Divide/square-root-heavy. */
 
 /* Simple repeatable random numbers. */
 
@@ -330,6 +337,7 @@ struct workspace {
 	double   *bodies;	/* n-body integration buffer. */
 	uint32_t *sort_work;	/* the buffer we actually sort. */
 	void    **chase;	/* private 16 MiB pointer-chase cycle. */
+	float    *stream_a, *stream_b, *stream_c;
 };
 
 static long              g_ncores  = 1;	/* active online cores. */
@@ -640,10 +648,18 @@ static void setup(void)
 		w->bodies     = xalloc(NBODY_N * 8 * sizeof(double));
 		w->sort_work  = xalloc(SORT_N * sizeof(uint32_t));
 		w->chase      = xalloc(CHASE_NODES * sizeof(void *));
+		w->stream_a   = xalloc(STREAM_N * sizeof(float));
+		w->stream_b   = xalloc(STREAM_N * sizeof(float));
+		w->stream_c   = xalloc(STREAM_N * sizeof(float));
 
 		memcpy(w->cipher_buf, g_cipher_src, CIPHER_LEN);
 		memcpy(w->simd_buf,   g_simd_src,   SIMD_BUF);
 		build_chase(w->chase, CHASE_NODES);
+		for (i = 0; i < STREAM_N; i++) {
+			w->stream_a[i] = (float)(i & 1023) * (1.0f / 1024.0f);
+			w->stream_b[i] = (float)((i * 17) & 1023) * (1.0f / 1024.0f);
+			w->stream_c[i] = 0.0f;
+		}
 	}
 }
 
@@ -657,6 +673,7 @@ static void teardown(void)
 		xfree(w->sieve);      xfree(w->ht);        xfree(w->cipher_buf);
 		xfree(w->simd_buf);   xfree(w->bodies);    xfree(w->sort_work);
 		xfree(w->chase);
+		xfree(w->stream_a); xfree(w->stream_b); xfree(w->stream_c);
 	}
 	xfree(g_ws);
 
@@ -684,6 +701,25 @@ static uint64_t run_int(uint64_t n, struct workspace *ws)
 {
 	(void)ws;
 	return fb_int_math(n * 100000);
+}
+
+static uint64_t run_int32(uint64_t n, struct workspace *ws)
+{
+	uint32_t a = 0x9e3779b9u, b = 0xbf58476du;
+	uint32_t c = 0x94d049bbu, d = 0x2545f491u;
+	uint64_t i, iters = n * 100000;
+	(void)ws;
+	for (i = 0; i < iters; i++) {
+		a = a * 0xdeadbeefu + b;
+		b = b * 0xdeadbeefu + c;
+		c = c * 0x9e3779b1u + d;
+		d = d * 0x9e3779b1u + a;
+		a ^= (c >> 7) | (c << 25);
+		b ^= (d >> 11) | (d << 21);
+		c ^= (a >> 17) | (a << 15);
+		d ^= (b >> 23) | (b << 9);
+	}
+	return (uint64_t)(a ^ b ^ c ^ d);
 }
 static uint64_t run_fp(uint64_t n, struct workspace *ws)
 {
@@ -735,8 +771,31 @@ static uint64_t run_chase(uint64_t n, struct workspace *ws)
 	return fb_chase(ws->chase, n * 1000000);
 }
 
+static uint64_t run_stream(uint64_t n, struct workspace *ws)
+{
+	uint64_t pass, checksum = 0;
+	const float scale = 1.0009765625f;
+	for (pass = 0; pass < n; pass++) {
+		size_t i;
+		float *restrict a = ws->stream_a;
+		float *restrict b = ws->stream_b;
+		float *restrict c = ws->stream_c;
+		for (i = 0; i < STREAM_N; i++)
+			c[i] = a[i] + scale * b[i];
+	}
+	{
+		uint32_t bits;
+		memcpy(&bits, &ws->stream_c[(n * 104729u) & (STREAM_N - 1)], sizeof bits);
+		checksum = bits;
+	}
+	return checksum;
+}
+
 static const struct test tests[] = {
-	{ "Integer Math",         D_INT,
+	{ "Native Integer Math",  "common 32-bit multiply/add/rotate mix",
+	  run_int32,    20, 100000.0 * 16,  "Mops/s",
+	  FB_REF_INT32,    FB_WEIGHT_INT32 },
+	{ "Wide Integer Math",    D_INT,
 	  run_int,      20, 100000.0 * 24,  "Mops/s",
 	  FB_REF_INT,      FB_WEIGHT_INT },
 	{ "Floating Point Math",  D_FP,
@@ -763,6 +822,9 @@ static const struct test tests[] = {
 	{ "Memory Latency",       CHASE_DETAIL,
 	  run_chase,     1, 1000000.0,      "ns/access",
 	  FB_REF_CHASE,    FB_WEIGHT_CHASE },
+	{ "Memory Bandwidth",     "STREAM triad, 12 MiB working set per thread",
+	  run_stream,    16, (double)STREAM_N * 12.0, "MB/s",
+	  FB_REF_STREAM,   FB_WEIGHT_STREAM },
 };
 
 #define NTESTS (sizeof(tests) / sizeof(tests[0]))
@@ -892,7 +954,9 @@ static double display_metric(const struct test *t, const struct result *r)
 	return r->rate;
 }
 
-#include "upload.c"
+#if !defined(FB_NO_UPLOAD)
+#  include "upload.c"
+#endif
 /* Print the results. */
 
 static void print_header(const struct system_info *info)
@@ -1029,9 +1093,14 @@ int fossbench_run(int verbose, int upload_mode, int system_check)
 				printf("  Result was not uploaded.\n");
 		}
 
-		if (do_upload)
+		if (do_upload) {
+#if defined(FB_NO_UPLOAD)
+			fprintf(stderr, "  Upload support is disabled in this build.\n");
+#else
 			upload_results(&system_info, multicore_score, singlecore_score,
 				       multi, single, duration_ms, &background, token);
+#endif
+		}
 	}
 	return 0;
 }

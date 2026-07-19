@@ -1,26 +1,42 @@
+> FOSSBench is ALPHA SOFTWARE, this means that scores reported from it should not be considered perfectly accurate. Across the machines we have tested (roughly 50 at the time of writing this) we have found it to be relatively accurate to what we would expect. This was more of a "for fun" project until someone confirms its validity on a larger scale.
+
 # fossbench
 
-fossbench is a CPU benchmarking tool thats fully open-source. The core idea is to build an open-source alternative to Passmark, Geekbench, and the like by providing our entire database for free to the public. Crowdsourcing the data to ensure its accuracy without any hidden strings being pulled behind the scenes.
+fossbench - open source CPU benchmark
 
-## Supported systems
+## Synopsis
 
-fossbench builds on Linux, macOS, and Windows for these architectures:
+```sh
+make
+./dist/fossbench-<os>-<arch> [--verbose] [--no-system-check] [--upload | --noupload]
+```
+
+## Description
+
+fossbench measures CPU and memory performance. Its source code and result
+database are public. Uploaded results provide the comparison data.
+
+Version 0.2 adds a 32-bit integer test and a 12 MiB STREAM triad per thread. It
+keeps the old 64-bit test as the lower-weight wide integer test and changes the
+score weights. Version 0.1 and 0.2 scores are not comparable.
+
+## Systems
 
 | Architecture | Baseline |
 |---|---|
 | ARM64 | ARMv8-A with NEON |
-| x86-64 | baseline x86-64 with SSE2 |
-| x86 32-bit | baseline i386 with SSE2 |
-| PowerPC 32-bit big-endian | scalar fallback with runtime-selected extended instructions |
-| PowerPC 64-bit big-endian | PowerPC 970 with AltiVec |
+| x86-64 | x86-64 with SSE2 |
+| x86 32-bit | i386 with SSE2 |
+| PowerPC 32-bit, big-endian | scalar fallback with runtime-selected extensions |
+| PowerPC 64-bit, big-endian | PowerPC 970 with AltiVec |
 
-If you find something it doesnt run on, please make a PR with patches if you think you can make it!
+Linux, macOS, and Windows are supported. Send a patch if a supported target
+fails.
 
-## Building
+## Build
 
-You need GNU Make, a C compiler, pthreads, and the system math library. Linux
-and macOS builds also need OpenSSL headers and libraries. Windows uses WinHTTP
-and does not depend on OpenSSL.
+GNU Make, a C compiler, pthreads, and the system math library are required.
+Linux and macOS also require OpenSSL. Windows uses WinHTTP.
 
 Build for the current machine:
 
@@ -28,17 +44,14 @@ Build for the current machine:
 make
 ```
 
-The binary is written to `dist/fossbench-<os>-<arch>`. To build it and start a
-benchmark immediately, run:
+The output path is `dist/fossbench-<os>-<arch>`. Build and run it with:
 
 ```sh
 make bench
 ```
 
-Named targets are available when you want a specific build, these can be found in the Makefile.
-
-Cross builds use conventional GNU toolchain names by default. Override a
-compiler when your toolchain uses a different name:
+The Makefile lists named build targets. Cross builds use standard GNU compiler
+names. Override them when needed:
 
 ```sh
 make linux-arm64 CC_ARM64=aarch64-linux-gnu-gcc
@@ -46,109 +59,112 @@ make linux-ppc32be CC_PPC32BE=powerpc-linux-gnu-gcc
 make windows-amd64 CC_WINDOWS_AMD64=x86_64-w64-mingw32-gcc
 ```
 
-The macOS AMD64 build defaults to macOS 10.5 compatibility. Set
-`MACOS_AMD64_MIN` to choose another deployment target.
+The macOS AMD64 target defaults to macOS 10.5. Set `MACOS_AMD64_MIN` to change
+the deployment target.
 
-## Running a benchmark
+## Run
 
-Run the binary directly. The exact name depends on your build:
+Run the generated binary:
 
 ```sh
 ./dist/fossbench-linux-amd64
 ```
 
-Useful options:
+Options:
 
 ```text
---verbose          print details for each workload
---no-system-check  skip the startup system activity sample
---upload           upload the result without prompting
+--verbose          print each workload
+--no-system-check  skip the startup activity sample
+--upload           upload without prompting
 --noupload         do not prompt or upload
 ```
 
-Before a normal run, fossbench samples system activity for ten seconds. It
+By default, fossbench samples system activity for ten seconds before a run. It
 reports background CPU use, available memory, process count, and the OS kernel
 or build. It does not collect process names or command lines.
 
-Result uploads are optional and anonymous unless you provide an API token. To
-attach a result to your fossbench.net account, create a benchmark client token
-on the site and export it before running the benchmark:
+Uploads are optional. They are anonymous without an API token. To attach a
+result to a fossbench.net account, create a benchmark client token and export
+it:
 
 ```sh
 export FOSSBENCH_TOKEN=fb_your_token_here
 ./dist/fossbench-linux-amd64 --upload
 ```
 
-You can point a build at another server with a compile-time definition:
+Set another server at compile time:
 
 ```sh
 make CFLAGS='-O2 -Wall -Wextra -DFB_API_BASE_URL=\"https://bench.example.com\"'
 ```
 
-## What it measures
+## Workloads
 
 | Workload | Measurement |
 |---|---|
-| Integer math | 64-bit multiplication, division, shifts, and bit operations |
+| Integer math | 32-bit multiply, divide, shifts, and bit operations |
+| Wide integer | 64-bit multiply, divide, shifts, and bit operations |
 | Floating point | scalar double-precision arithmetic |
-| Prime numbers | sieve of Eratosthenes up to 2,000,000 |
-| Extended instructions | 128-bit integer and floating point vector work |
-| Compression | LZ77 match finding over a generated 4 MiB corpus |
-| Encryption | ChaCha20 over a 1 MiB buffer |
+| Prime numbers | sieve of Eratosthenes to 2,000,000 |
+| Extended instructions | 128-bit integer and floating-point vector work |
+| Compression | LZ77 match finding on a generated 4 MiB corpus |
+| Encryption | ChaCha20 on a 1 MiB buffer |
 | Physics | direct-sum gravity for 512 bodies |
 | Sorting | in-place heapsort of one million 32-bit integers |
-| Memory latency | dependent pointer chasing through a private cycle larger than cache |
+| Memory latency | dependent pointer chasing through a cycle larger than cache |
+| Memory bandwidth | STREAM triad with a 12 MiB working set per thread |
 
 ## Scores
 
-A workload score compares its measured rate with a fixed reference rate:
+Each workload uses a fixed reference rate:
 
 ```text
 test score = 10000 * measured rate / reference rate
 ```
 
-The single-core and multicore totals are weighted geometric means. Both passes
-use the same references and weights.
+Single-core and multicore totals are weighted geometric means. Both use the
+same references and weights.
 
 | Workload | Weight |
 |---|---:|
-| Integer math | 20% |
-| Memory latency | 16% |
-| Compression | 14% |
-| Sorting | 12% |
-| Extended instructions | 11% |
-| Floating point | 9% |
+| Integer math | 10% |
+| Wide integer | 3% |
+| Floating point | 10% |
+| Prime numbers | 5% |
+| Extended instructions | 16% |
+| Compression | 12% |
 | Encryption | 8% |
-| Prime numbers | 6% |
-| Physics | 4% |
+| Physics | 3% |
+| Sorting | 8% |
+| Memory latency | 10% |
+| Memory bandwidth | 15% |
 
-The benchmark profile lives in `src/app/benchmark.c`. Changing its reference
-rates, weights, workload sizes, calibration time, or repeat count makes scores
-incompatible with the default build.
+The benchmark profile is in `src/app/benchmark.c`. Changing its reference
+rates, weights, workload sizes, calibration time, or repeat count makes its
+scores incompatible with the default build.
 
-Memory latency is printed in nanoseconds per access, though scoring uses the
-underlying pointer-chase throughput. Memory placement and background operating
-system work can move this result between runs.
+Memory latency is shown in nanoseconds per access. Its score uses pointer-chase
+throughput. Memory placement and background system work affect the result.
 
 ## Tests
 
-The correctness suite compares the kernels with C implementations, known
-answers, or invariants. It covers the RFC 8439 ChaCha20 vector, prime counts,
-sorting, physics momentum, pointer chasing, deterministic output, and concurrent
-execution.
+Run the correctness suite:
 
 ```sh
 make test
 ```
 
-The command exits with a nonzero status when a check fails.
+It checks kernels against C implementations, known answers, or invariants. It
+covers ChaCha20 RFC 8439, prime counts, sorting, physics momentum, pointer
+chasing, deterministic output, and concurrent execution. Failure returns a
+nonzero status.
 
-## Repository layout
+## Files
 
 ```text
-src/main.c                         command-line parsing and entrypoint
-src/app/benchmark.c                workload setup, timing, scoring, and run flow
-src/app/benchmark.h                function used by main.c
+src/main.c                         option parsing and entry point
+src/app/benchmark.c                workloads, timing, scoring, and run flow
+src/app/benchmark.h                interface used by main.c
 src/app/upload.c                   API payload and network transport
 src/kernels/fossbench-arm64.S      ARM64 kernels
 src/kernels/fossbench-amd64.S      x86-64 kernels
