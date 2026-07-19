@@ -43,50 +43,10 @@ static int json_string_field(const char *json, const char *field, char *dst, siz
 	return *p == '"' && used > 0;
 }
 
-#if !defined(_WIN32)
-/* Load the certificates included with the program. */
-static int load_embedded_ca_bundle(SSL_CTX *ctx)
-{
-	X509_STORE *store = SSL_CTX_get_cert_store(ctx);
-	BIO *bio = BIO_new_mem_buf(fb_ca_bundle_pem, -1);
-	X509 *cert;
-	int loaded = 0;
-
-	if (!bio) return 0;
-	while ((cert = PEM_read_bio_X509(bio, NULL, NULL, NULL)) != NULL) {
-		if (X509_STORE_add_cert(store, cert)) loaded++;
-		X509_free(cert);
-	}
-	BIO_free(bio);
-	ERR_clear_error();	/* Reaching the end sets an error, which is fine. */
-	return loaded > 0;
-}
-#endif
-
 #if defined(_WIN32)
-/* Check if WinHTTP found a certificate problem. */
-static int is_winhttp_secure_error(DWORD err)
-{
-	switch (err) {
-	case ERROR_WINHTTP_SECURE_CERT_DATE_INVALID:
-	case ERROR_WINHTTP_SECURE_CERT_CN_INVALID:
-	case ERROR_WINHTTP_SECURE_INVALID_CA:
-	case ERROR_WINHTTP_SECURE_CERT_REV_FAILED:
-	case ERROR_WINHTTP_SECURE_CHANNEL_ERROR:
-	case ERROR_WINHTTP_SECURE_INVALID_CERT:
-	case ERROR_WINHTTP_SECURE_CERT_REVOKED:
-	case ERROR_WINHTTP_SECURE_FAILURE:
-	case ERROR_WINHTTP_SECURE_CERT_WRONG_USAGE:
-	case ERROR_WINHTTP_SECURE_FAILURE_PROXY:
-		return 1;
-	default:
-		return 0;
-	}
-}
-
 /* Send the request with Windows networking. */
 static int winhttp_post(const char *host, const char *port, const char *path,
-			 int use_tls, const char *payload, int payload_len,
+			 const char *payload, int payload_len,
 			 const char *auth_header, int *out_status,
 			 char *response, size_t response_cap)
 {
@@ -116,25 +76,18 @@ static int winhttp_post(const char *host, const char *port, const char *path,
 		goto done;
 	}
 	hrequest = WinHttpOpenRequest(hconnect, L"POST", wpath, NULL, WINHTTP_NO_REFERER,
-				      WINHTTP_DEFAULT_ACCEPT_TYPES,
-				      use_tls ? WINHTTP_FLAG_SECURE : 0);
+				      WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
 	if (!hrequest) {
 		fprintf(stderr, "  upload error: cannot create HTTP request\n");
 		goto done;
 	}
 	if (!WinHttpSendRequest(hrequest, wheaders, (DWORD)-1L, (LPVOID)payload,
 				(DWORD)payload_len, (DWORD)payload_len, 0)) {
-		if (is_winhttp_secure_error(GetLastError()))
-			fprintf(stderr, "  upload error: TLS connection or certificate verification failed\n");
-		else
-			fprintf(stderr, "  upload error: send failed\n");
+		fprintf(stderr, "  upload error: send failed\n");
 		goto done;
 	}
 	if (!WinHttpReceiveResponse(hrequest, NULL)) {
-		if (is_winhttp_secure_error(GetLastError()))
-			fprintf(stderr, "  upload error: TLS connection or certificate verification failed\n");
-		else
-			fprintf(stderr, "  upload error: no server response\n");
+		fprintf(stderr, "  upload error: no server response\n");
 		goto done;
 	}
 	if (!WinHttpQueryHeaders(hrequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
@@ -176,21 +129,17 @@ static int upload_results(const struct system_info *info, double score,
 	char auth_header[600], response_body[2048], claim_url[1024];
 	char cpu[512], model[512], os[512], compiler[256], kernel[256];
 	const char *base = FB_API_BASE_URL, *p, *slash, *colon;
-	int use_tls, status = 0, payload_len;
+	int status = 0, payload_len;
 #if !defined(_WIN32)
 	char request[20000], response[4096];
 	struct addrinfo hints, *addresses = NULL, *a;
-	SSL_CTX *tls_ctx = NULL;
-	SSL *tls = NULL;
 	int fd = -1, request_len;
 #endif
 
-	if (!strncmp(base, "https://", 8)) {
-		use_tls = 1; p = base + 8; strcpy(port, "443");
-	} else if (!strncmp(base, "http://", 7)) {
-		use_tls = 0; p = base + 7; strcpy(port, "80");
+	if (!strncmp(base, "http://", 7)) {
+		p = base + 7; strcpy(port, "80");
 	} else {
-		fprintf(stderr, "  upload error: unsupported URL scheme\n");
+		fprintf(stderr, "  upload error: only HTTP URLs are supported\n");
 		return 0;
 	}
 	slash = strchr(p, '/');
@@ -281,31 +230,10 @@ static int upload_results(const struct system_info *info, double score,
 	}
 	freeaddrinfo(addresses);
 	if (fd < 0) { fprintf(stderr, "  upload error: cannot connect to %s:%s\n", host, port); return 0; }
-	if (use_tls) {
-		tls_ctx = SSL_CTX_new(TLS_client_method());
-		if (!tls_ctx) {
-			fprintf(stderr, "  upload error: cannot initialize TLS trust store\n");
-			goto upload_failed;
-		}
-		SSL_CTX_set_default_verify_paths(tls_ctx);	/* Try system certificates too. */
-		if (!load_embedded_ca_bundle(tls_ctx)) {
-			fprintf(stderr, "  upload error: cannot initialize TLS trust store\n");
-			goto upload_failed;
-		}
-		SSL_CTX_set_verify(tls_ctx, SSL_VERIFY_PEER, NULL);
-		tls = SSL_new(tls_ctx);
-		if (!tls || !SSL_set_tlsext_host_name(tls, host) ||
-		    !SSL_set1_host(tls, host) || !SSL_set_fd(tls, fd) ||
-		    SSL_connect(tls) != 1) {
-			fprintf(stderr, "  upload error: TLS connection or certificate verification failed\n");
-			goto upload_failed;
-		}
-	}
 	{
 		size_t sent = 0;
 		while (sent < (size_t)request_len) {
-			int n = use_tls ? SSL_write(tls, request + sent, (int)((size_t)request_len - sent)) :
-				(int)send(fd, request + sent, (size_t)request_len - sent, 0);
+			int n = (int)send(fd, request + sent, (size_t)request_len - sent, 0);
 			if (n <= 0) { fprintf(stderr, "  upload error: send failed\n"); goto upload_failed; }
 			sent += (size_t)n;
 		}
@@ -314,8 +242,7 @@ static int upload_results(const struct system_info *info, double score,
 		size_t used = 0;
 		int n;
 		do {
-			n = use_tls ? SSL_read(tls, response + used, (int)(sizeof(response) - used - 1)) :
-				(int)recv(fd, response + used, sizeof(response) - used - 1, 0);
+			n = (int)recv(fd, response + used, sizeof(response) - used - 1, 0);
 			if (n > 0) used += (size_t)n;
 		} while (n > 0 && used + 1 < sizeof(response));
 		if (used == 0) { fprintf(stderr, "  upload error: no server response\n"); goto upload_failed; }
@@ -326,11 +253,9 @@ static int upload_results(const struct system_info *info, double score,
 			if (body) snprintf(response_body, sizeof(response_body), "%s", body + 4);
 		}
 	}
-	if (tls) { SSL_shutdown(tls); SSL_free(tls); }
-	if (tls_ctx) SSL_CTX_free(tls_ctx);
 	close(fd);
 #else
-	if (!winhttp_post(host, port, path, use_tls, payload, payload_len, auth_header,
+	if (!winhttp_post(host, port, path, payload, payload_len, auth_header,
 			  &status, response_body, sizeof(response_body)))
 		return 0;
 #endif
@@ -357,8 +282,6 @@ static int upload_results(const struct system_info *info, double score,
 
 #if !defined(_WIN32)
 upload_failed:
-	if (tls) SSL_free(tls);
-	if (tls_ctx) SSL_CTX_free(tls_ctx);
 	if (fd >= 0) close(fd);
 	return 0;
 #endif

@@ -3,9 +3,7 @@
 
 CC      ?= cc
 CFLAGS  ?= -O2 -Wall -Wextra
-TLS_CFLAGS ?=
-TLS_LDLIBS ?= -lssl -lcrypto
-LDLIBS  ?= -lm $(TLS_LDLIBS)
+LDLIBS  ?= -lm
 # Needed for the worker threads.
 PTHREAD := -pthread
 
@@ -119,31 +117,31 @@ windows-amd64: $(DIST)/fossbench-windows-amd64.exe
 windows-i386: $(DIST)/fossbench-windows-i386.exe
 
 $(DIST)/fossbench-linux-arm64: $(DRIVER) $(DRIVER_DEPS) $(ASM_ARM64) | $(DIST)
-	$(CC_ARM64) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_ARM64) $(LDLIBS)
+	$(CC_ARM64) $(CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_ARM64) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossbench-linux-amd64: $(DRIVER) $(DRIVER_DEPS) $(ASM_AMD64) | $(DIST)
-	$(CC_AMD64) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_AMD64) $(LDLIBS)
+	$(CC_AMD64) $(CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_AMD64) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossbench-linux-i386: $(DRIVER) $(DRIVER_DEPS) $(ASM_I386) | $(DIST)
-	$(CC_I386) -m32 -march=pentium4 -fno-pie -no-pie $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_I386) $(LDLIBS)
+	$(CC_I386) -m32 -march=pentium4 -fno-pie -no-pie $(CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_I386) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossbench-linux-ppc32be: $(DRIVER) $(DRIVER_DEPS) $(ASM_PPC32) | $(DIST)
-	$(CC_PPC32BE) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_PPC32) $(LDLIBS)
+	$(CC_PPC32BE) $(CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_PPC32) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossbench-linux-ppc64be: $(DRIVER) $(DRIVER_DEPS) $(ASM_PPC64) | $(DIST)
-	$(CC_PPC64BE) -mcpu=970 -maltivec $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_PPC64) $(LDLIBS)
+	$(CC_PPC64BE) -mcpu=970 -maltivec $(CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_PPC64) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossbench-macos-arm64: $(DRIVER) $(DRIVER_DEPS) $(ASM_ARM64) | $(DIST)
-	$(CC_MACOS_ARM64) -arch arm64 $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_ARM64) $(LDLIBS)
+	$(CC_MACOS_ARM64) -arch arm64 $(CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_ARM64) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossbench-macos-amd64: $(DRIVER) $(DRIVER_DEPS) $(ASM_AMD64) | $(DIST)
-	MACOSX_DEPLOYMENT_TARGET=$(MACOS_AMD64_MIN) $(CC_MACOS_AMD64) -arch x86_64 -mmacosx-version-min=$(MACOS_AMD64_MIN) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -Wl,-no_fixup_chains -o $@ $(DRIVER) $(ASM_AMD64) $(LDLIBS)
+	MACOSX_DEPLOYMENT_TARGET=$(MACOS_AMD64_MIN) $(CC_MACOS_AMD64) -arch x86_64 -mmacosx-version-min=$(MACOS_AMD64_MIN) $(CFLAGS) $(PTHREAD) $(LDFLAGS) -Wl,-no_fixup_chains -o $@ $(DRIVER) $(ASM_AMD64) $(LDLIBS)
 	@echo "built $@"
 
 # Windows builds are static and use WinHTTP.
@@ -179,7 +177,7 @@ NATIVE_HAS_RULE := yes
 endif
 ifneq ($(NATIVE_HAS_RULE),yes)
 $(NATIVE_BIN): $(DRIVER) $(DRIVER_DEPS) $(HOST_KERNEL) | $(DIST)
-	$(CC) $(CFLAGS) $(TLS_CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(HOST_KERNEL) $(LDLIBS)
+	$(CC) $(CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(HOST_KERNEL) $(LDLIBS)
 	@echo "built $@"
 endif
 

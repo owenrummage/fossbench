@@ -36,7 +36,7 @@ fails.
 ## Build
 
 GNU Make, a C compiler, pthreads, and the system math library are required.
-Linux and macOS also require OpenSSL. Windows uses WinHTTP.
+Uploads use plain HTTP and require no TLS library.
 
 Build for the current machine:
 
@@ -93,7 +93,7 @@ code and link that can be used to attach the result to a fossbench.net account:
 Set another server at compile time:
 
 ```sh
-make CFLAGS='-O2 -Wall -Wextra -DFB_API_BASE_URL=\"https://bench.example.com\"'
+make CFLAGS='-O2 -Wall -Wextra -DFB_API_BASE_URL=\"http://bench.example.com\"'
 ```
 
 ## Workloads

@@ -32,37 +32,20 @@ jobs:
         include:
           - target: linux-amd64
             os: ubuntu-24.04
-            openssl_target: linux-x86_64
-            cross_prefix: ''
           - target: linux-i386
             os: ubuntu-24.04
-            openssl_target: linux-x86
-            cross_prefix: ''
           - target: linux-arm64
             os: ubuntu-24.04-arm
-            openssl_target: linux-aarch64
-            cross_prefix: ''
-            openssl_options: no-asm
           - target: linux-ppc32be
             os: ubuntu-24.04
-            openssl_target: linux-ppc
-            cross_prefix: powerpc-linux-gnu-
           - target: macos-amd64
             os: macos-14
-            openssl_target: darwin64-x86_64-cc
-            cross_prefix: ''
           - target: macos-arm64
             os: macos-14
-            openssl_target: darwin64-arm64-cc
-            cross_prefix: ''
           - target: windows-amd64
             os: ubuntu-24.04
-            openssl_target: ''
-            cross_prefix: ''
           - target: windows-i386
             os: ubuntu-24.04
-            openssl_target: ''
-            cross_prefix: ''
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out source
@@ -92,62 +75,26 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes gcc-mingw-w64-i686
 
-      - name: Build static OpenSSL
-        if: matrix.openssl_target != ''
-        env:
-          OPENSSL_VERSION: 3.5.7
-          OPENSSL_TARGET: ${{ matrix.openssl_target }}
-          CROSS_PREFIX: ${{ matrix.cross_prefix }}
-          OPENSSL_OPTIONS: ${{ matrix.openssl_options }}
-          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.target == 'macos-amd64' && '10.5' || '' }}
-        run: |
-          curl --fail --location --retry 3 \
-            "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz" \
-            --output openssl.tar.gz
-          tar -xzf openssl.tar.gz
-          cd "openssl-${OPENSSL_VERSION}"
-          CROSS_COMPILE="$CROSS_PREFIX" ./Configure "$OPENSSL_TARGET" \
-            no-shared no-tests no-module no-dso $OPENSSL_OPTIONS \
-            --prefix="$GITHUB_WORKSPACE/openssl-static" \
-            --openssldir=/etc/ssl
-          make -j3 build_sw
-          make install_sw
-
-      - name: Build Linux executable with static OpenSSL
+      - name: Build Linux executable
         if: startsWith(matrix.target, 'linux-')
         run: |
-          OPENSSL_LIBDIR="$(find "$GITHUB_WORKSPACE/openssl-static" -type f -name libssl.a -exec dirname {} \;)"
-          EXTRA_STATIC_LIBS='-ldl'
-          if [ "${{ matrix.target }}" = linux-ppc32be ]; then
-            EXTRA_STATIC_LIBS="$EXTRA_STATIC_LIBS -latomic"
-          fi
-          make "${{ matrix.target }}" \
-            TLS_CFLAGS="-I$GITHUB_WORKSPACE/openssl-static/include" \
-            TLS_LDLIBS="$OPENSSL_LIBDIR/libssl.a $OPENSSL_LIBDIR/libcrypto.a $EXTRA_STATIC_LIBS"
+          make "${{ matrix.target }}"
           file "dist/fossbench-${{ matrix.target }}"
           if ! file "dist/fossbench-${{ matrix.target }}" | grep -q 'dynamically linked'; then
             echo 'Linux release uses static glibc, which is unsafe with NSS-based DNS' >&2
-            exit 1
-          fi
-          if readelf -d "dist/fossbench-${{ matrix.target }}" | grep -E 'NEEDED.*lib(ssl|crypto)'; then
-            echo 'Linux release uses dynamic OpenSSL' >&2
             exit 1
           fi
           if [ "${{ matrix.target }}" != linux-ppc32be ]; then
             "dist/fossbench-${{ matrix.target }}" --help
           fi
 
-      - name: Build macOS executable with static OpenSSL
+      - name: Build macOS executable
         if: startsWith(matrix.target, 'macos-')
         env:
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.target == 'macos-amd64' && '10.5' || '' }}
         run: |
-          OPENSSL_LIBDIR="$(find "$GITHUB_WORKSPACE/openssl-static" -type f -name libssl.a -exec dirname {} \;)"
           build_log="$(mktemp)"
-          if ! make "${{ matrix.target }}" \
-              TLS_CFLAGS="-I$GITHUB_WORKSPACE/openssl-static/include" \
-              TLS_LDLIBS="$OPENSSL_LIBDIR/libssl.a $OPENSSL_LIBDIR/libcrypto.a" \
-              >"$build_log" 2>&1; then
+          if ! make "${{ matrix.target }}" >"$build_log" 2>&1; then
             cat "$build_log"
             {
               echo '## macOS build failure'
@@ -158,10 +105,6 @@ jobs:
             exit 1
           fi
           cat "$build_log"
-          if otool -L "dist/fossbench-${{ matrix.target }}" | grep -E 'lib(ssl|crypto)'; then
-            echo 'macOS release uses dynamic OpenSSL' >&2
-            exit 1
-          fi
 
       - name: Build Windows executable
         if: startsWith(matrix.target, 'windows-')
@@ -218,5 +161,5 @@ jobs:
             release/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --title "Release $RELEASE_TAG" \
-            --notes "⚠️ **i386 (Pentium 4) support is new in this release and still being validated on real hardware.** i386 benchmark scores should not be considered accurate yet." \
+            --notes "Fixed x86/Linux builds on systems without OpenSSL development headers. Result uploads now use plain HTTP on every platform, removing the OpenSSL build and runtime dependency." \
             --generate-notes

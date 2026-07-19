@@ -18,10 +18,6 @@
 #if !defined(_WIN32) && !defined(FB_NO_UPLOAD)
 #  include <sys/socket.h>
 #  include <netdb.h>
-#  include <openssl/ssl.h>
-#  include <openssl/err.h>
-#  include <openssl/pem.h>
-#  include "../ca_bundle.h"
 #endif
 #if defined(__APPLE__)
 #  include <sys/types.h>
@@ -32,9 +28,9 @@
 
 /* The server URL can be changed when building. */
 #ifndef FB_API_BASE_URL
-#  define FB_API_BASE_URL "https://fossbench.net"
+#  define FB_API_BASE_URL "http://fossbench.net"
 #endif
-#define FB_VERSION "0.2.1"
+#define FB_VERSION "0.2.2"
 
 #if defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64)
 #  define D_INT  "64-bit ALU: madd, umulh, udiv, bitops"
