@@ -147,7 +147,8 @@ jobs:
           if ! make "${{ matrix.target }}" \
               TLS_CFLAGS="-I$GITHUB_WORKSPACE/openssl-static/include" \
               TLS_LDLIBS="$OPENSSL_LIBDIR/libssl.a $OPENSSL_LIBDIR/libcrypto.a" \
-              2>&1 | tee "$build_log"; then
+              >"$build_log" 2>&1; then
+            cat "$build_log"
             {
               echo '## macOS build failure'
               echo '```text'
@@ -156,6 +157,7 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
+          cat "$build_log"
           if otool -L "dist/fossbench-${{ matrix.target }}" | grep -E 'lib(ssl|crypto)'; then
             echo 'macOS release uses dynamic OpenSSL' >&2
             exit 1
@@ -173,7 +175,8 @@ jobs:
           if [[ "${{ matrix.target }}" == windows-* ]]; then
             bin="$bin.exe"
           fi
-          tar -czf "fossbench-${{ matrix.target }}.tar.gz" -C dist "$bin"
+          tar -czf "$GITHUB_WORKSPACE/fossbench-${{ matrix.target }}.tar.gz" \
+            -C "$GITHUB_WORKSPACE/dist" "$bin"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
