@@ -35,7 +35,7 @@
 #endif
 #define FB_VERSION "0.2.1"
 
-#if defined(__aarch64__) || defined(_M_ARM64)
+#if defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64)
 #  define D_INT  "64-bit ALU: madd, umulh, udiv, bitops"
 #  define D_FP   "double: fmadd, fdiv, fsqrt"
 #  define D_SIMD "NEON ASIMD: 128-bit integer + float"

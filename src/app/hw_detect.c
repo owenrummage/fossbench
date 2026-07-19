@@ -33,7 +33,7 @@
 #  define HW_OS "POSIX"
 #endif
 
-#if defined(__aarch64__) || defined(_M_ARM64)
+#if defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64)
 #  define HW_ARCH "ARM64"
 #elif defined(__x86_64__) || defined(_M_X64)
 #  define HW_ARCH "x86-64"
@@ -445,7 +445,7 @@ void hw_detect_system(struct system_info *info)
 				case 0x17d5b93au: name = "Apple M4"; break;
 				}
 			}
-#if defined(__aarch64__) || defined(_M_ARM64)
+#if defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64)
 			if (name == NULL) name = "Apple M-series";
 #endif
 			if (name != NULL) snprintf(info->cpu, sizeof info->cpu, "%s", name);

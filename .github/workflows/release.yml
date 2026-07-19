@@ -143,9 +143,15 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.target == 'macos-amd64' && '10.5' || '' }}
         run: |
           OPENSSL_LIBDIR="$(find "$GITHUB_WORKSPACE/openssl-static" -type f -name libssl.a -exec dirname {} \;)"
-          make "${{ matrix.target }}" \
-            TLS_CFLAGS="-I$GITHUB_WORKSPACE/openssl-static/include" \
-            TLS_LDLIBS="$OPENSSL_LIBDIR/libssl.a $OPENSSL_LIBDIR/libcrypto.a"
+          build_log="$(mktemp)"
+          if ! make "${{ matrix.target }}" \
+              TLS_CFLAGS="-I$GITHUB_WORKSPACE/openssl-static/include" \
+              TLS_LDLIBS="$OPENSSL_LIBDIR/libssl.a $OPENSSL_LIBDIR/libcrypto.a" \
+              2>&1 | tee "$build_log"; then
+            message="$(tail -40 "$build_log" | tr '\n' ' ')"
+            echo "::error title=macOS build failed::$message"
+            exit 1
+          fi
           if otool -L "dist/fossbench-${{ matrix.target }}" | grep -E 'lib(ssl|crypto)'; then
             echo 'macOS release uses dynamic OpenSSL' >&2
             exit 1
