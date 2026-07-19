@@ -19,6 +19,30 @@ static void json_escape(const char *src, char *dst, size_t cap)
 	dst[used] = '\0';
 }
 
+/* Extract a simple JSON string field from the upload response. */
+static int json_string_field(const char *json, const char *field, char *dst, size_t cap)
+{
+	char key[64];
+	const char *p;
+	size_t used = 0;
+
+	if (cap == 0 || snprintf(key, sizeof(key), "\"%s\"", field) < 0)
+		return 0;
+	p = strstr(json, key);
+	if (!p) return 0;
+	p += strlen(key);
+	while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+	if (*p++ != ':') return 0;
+	while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+	if (*p++ != '"') return 0;
+	while (*p && *p != '"' && used + 1 < cap) {
+		if (*p == '\\' && p[1]) p++;
+		dst[used++] = *p++;
+	}
+	dst[used] = '\0';
+	return *p == '"' && used > 0;
+}
+
 #if !defined(_WIN32)
 /* Load the certificates included with the program. */
 static int load_embedded_ca_bundle(SSL_CTX *ctx)
@@ -63,7 +87,8 @@ static int is_winhttp_secure_error(DWORD err)
 /* Send the request with Windows networking. */
 static int winhttp_post(const char *host, const char *port, const char *path,
 			 int use_tls, const char *payload, int payload_len,
-			 const char *auth_header, int *out_status)
+			 const char *auth_header, int *out_status,
+			 char *response, size_t response_cap)
 {
 	wchar_t whost[256], wpath[512], wheaders[700];
 	char header_buf[700];
@@ -119,6 +144,20 @@ static int winhttp_post(const char *host, const char *port, const char *path,
 		goto done;
 	}
 	*out_status = (int)status;
+	if (response_cap > 0) {
+		size_t used = 0;
+		while (used + 1 < response_cap) {
+			DWORD available = 0, got = 0;
+			DWORD room = (DWORD)(response_cap - used - 1);
+			if (!WinHttpQueryDataAvailable(hrequest, &available) || available == 0)
+				break;
+			if (available > room) available = room;
+			if (!WinHttpReadData(hrequest, response + used, available, &got) || got == 0)
+				break;
+			used += got;
+		}
+		response[used] = '\0';
+	}
 	ok = 1;
 done:
 	if (hrequest) WinHttpCloseHandle(hrequest);
@@ -131,15 +170,15 @@ done:
 static int upload_results(const struct system_info *info, double score,
 			  double singlecore_score, const struct result *multi,
 			  const struct result *single, uint64_t duration_ms,
-			  const struct background_metrics *background, const char *token)
+			  const struct background_metrics *background)
 {
 	char host[256], port[16], path[512], payload[16384];
-	char auth_header[600];
+	char auth_header[600], response_body[2048], claim_url[1024];
 	char cpu[512], model[512], os[512], compiler[256], kernel[256];
 	const char *base = FB_API_BASE_URL, *p, *slash, *colon;
 	int use_tls, status = 0, payload_len;
 #if !defined(_WIN32)
-	char request[20000], response[512];
+	char request[20000], response[4096];
 	struct addrinfo hints, *addresses = NULL, *a;
 	SSL_CTX *tls_ctx = NULL;
 	SSL *tls = NULL;
@@ -222,15 +261,9 @@ static int upload_results(const struct system_info *info, double score,
 		payload_len = (int)(used + 3);
 	}
 
+	/* Every upload is anonymous and claim-based. */
 	auth_header[0] = '\0';
-	if (token && token[0]) {
-		int n = snprintf(auth_header, sizeof(auth_header),
-				  "Authorization: Bearer %s\r\n", token);
-		if (n < 0 || (size_t)n >= sizeof(auth_header)) {
-			fprintf(stderr, "  upload error: API token too long\n");
-			return 0;
-		}
-	}
+	response_body[0] = '\0';
 #if !defined(_WIN32)
 	request_len = snprintf(request, sizeof(request),
 		"POST %s HTTP/1.1\r\nHost: %s:%s\r\nContent-Type: application/json\r\n"
@@ -278,17 +311,27 @@ static int upload_results(const struct system_info *info, double score,
 		}
 	}
 	{
-		int n = use_tls ? SSL_read(tls, response, sizeof(response) - 1) :
-			(int)recv(fd, response, sizeof(response) - 1, 0);
-		if (n <= 0) { fprintf(stderr, "  upload error: no server response\n"); goto upload_failed; }
-		response[n] = '\0';
+		size_t used = 0;
+		int n;
+		do {
+			n = use_tls ? SSL_read(tls, response + used, (int)(sizeof(response) - used - 1)) :
+				(int)recv(fd, response + used, sizeof(response) - used - 1, 0);
+			if (n > 0) used += (size_t)n;
+		} while (n > 0 && used + 1 < sizeof(response));
+		if (used == 0) { fprintf(stderr, "  upload error: no server response\n"); goto upload_failed; }
+		response[used] = '\0';
 		if (sscanf(response, "HTTP/%*s %d", &status) != 1) status = 0;
+		{
+			char *body = strstr(response, "\r\n\r\n");
+			if (body) snprintf(response_body, sizeof(response_body), "%s", body + 4);
+		}
 	}
 	if (tls) { SSL_shutdown(tls); SSL_free(tls); }
 	if (tls_ctx) SSL_CTX_free(tls_ctx);
 	close(fd);
 #else
-	if (!winhttp_post(host, port, path, use_tls, payload, payload_len, auth_header, &status))
+	if (!winhttp_post(host, port, path, use_tls, payload, payload_len, auth_header,
+			  &status, response_body, sizeof(response_body)))
 		return 0;
 #endif
 	if (status == 401) {
@@ -300,10 +343,16 @@ static int upload_results(const struct system_info *info, double score,
 		return 0;
 	}
 	if (status < 200 || status >= 300) { fprintf(stderr, "  upload failed: server returned HTTP %d\n", status); return 0; }
-	if (token)
-		printf("  Results uploaded and published to your profile (HTTP %d).\n", status);
-	else
-		printf("  Results uploaded, pending administrator review (HTTP %d).\n", status);
+	if (!json_string_field(response_body, "claim_url", claim_url, sizeof(claim_url))) {
+		fprintf(stderr, "  upload failed: server did not return a claim link\n");
+		return 0;
+	}
+	printf("  Results uploaded (HTTP %d).\n", status);
+	{
+		const char *claim_code = strrchr(claim_url, '/');
+		printf("  Claim code: %s\n", claim_code && claim_code[1] ? claim_code + 1 : claim_url);
+	}
+	printf("  Claim your result: %s\n", claim_url);
 	return 1;
 
 #if !defined(_WIN32)

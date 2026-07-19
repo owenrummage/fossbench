@@ -836,12 +836,7 @@ int fossbench_run(int verbose, int upload_mode, int system_check)
 	teardown();
 
 	{
-		/* Read the token from the environment. */
-		const char *token = getenv("FOSSBENCH_TOKEN");
 		int do_upload;
-
-		if (token && token[0] == '\0')
-			token = NULL;
 
 		if (upload_mode == 1) {
 			do_upload = 1;
@@ -850,10 +845,7 @@ int fossbench_run(int verbose, int upload_mode, int system_check)
 			printf("  Result was not uploaded.\n");
 		} else {
 			char answer[16];
-			if (token)
-				printf("  Upload this result to %s using your API token? [y/N] ", FB_API_BASE_URL);
-			else
-				printf("  Upload this result to %s? [y/N] ", FB_API_BASE_URL);
+			printf("  Upload this result to %s? [y/N] ", FB_API_BASE_URL);
 			fflush(stdout);
 			do_upload = fgets(answer, sizeof(answer), stdin) &&
 				    (answer[0] == 'y' || answer[0] == 'Y');
@@ -866,7 +858,7 @@ int fossbench_run(int verbose, int upload_mode, int system_check)
 			fprintf(stderr, "  Upload support is disabled in this build.\n");
 #else
 			upload_results(&system_info, multicore_score, singlecore_score,
-				       multi, single, duration_ms, &background, token);
+				       multi, single, duration_ms, &background);
 #endif
 		}
 	}

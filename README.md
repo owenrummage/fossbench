@@ -83,12 +83,10 @@ By default, fossbench samples system activity for ten seconds before a run. It
 reports background CPU use, available memory, process count, and the OS kernel
 or build. It does not collect process names or command lines.
 
-Uploads are optional. They are anonymous without an API token. To attach a
-result to a fossbench.net account, create a benchmark client token and export
-it:
+Uploads are optional and anonymous. Every successful upload prints a claim
+code and link that can be used to attach the result to a fossbench.net account:
 
 ```sh
-export FOSSBENCH_TOKEN=fb_your_token_here
 ./dist/fossbench-linux-amd64 --upload
 ```
 
