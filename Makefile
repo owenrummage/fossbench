@@ -15,6 +15,8 @@ ASM_AMD64 := src/kernels/fossbench-amd64.S
 ASM_I386  := src/kernels/fossbench-i386.S
 ASM_PPC32 := src/kernels/fossbench-ppc32be.S
 ASM_PPC64 := src/kernels/fossbench-ppc64be.S
+ASM_PPC32LE := src/kernels/fossbench-ppc32le.S
+ASM_PPC64LE := src/kernels/fossbench-ppc64le.S
 
 # Figure out the host CPU.
 HOST_ARCH := $(shell uname -m)
@@ -27,6 +29,12 @@ else ifneq (,$(filter x86_64 amd64,$(HOST_ARCH)))
 else ifneq (,$(filter i386 i486 i586 i686 x86,$(HOST_ARCH)))
 	HOST_ARCHNAME := i386
 	HOST_KERNEL   := $(ASM_I386)
+else ifneq (,$(filter ppc64le powerpc64le,$(HOST_ARCH)))
+	HOST_ARCHNAME := ppc64le
+	HOST_KERNEL   := $(ASM_PPC64LE)
+else ifneq (,$(filter ppcle powerpcle ppc32le powerpc32le,$(HOST_ARCH)))
+	HOST_ARCHNAME := ppc32le
+	HOST_KERNEL   := $(ASM_PPC32LE)
 else ifneq (,$(filter ppc powerpc ppc32 powerpc32,$(HOST_ARCH)))
 	HOST_ARCHNAME := ppc32be
 	HOST_KERNEL   := $(ASM_PPC32)
@@ -44,6 +52,12 @@ ifeq ($(HOST_ARCHNAME),i386)
 endif
 ifeq ($(HOST_ARCHNAME),ppc64be)
 	CFLAGS += -mcpu=970 -maltivec
+endif
+ifeq ($(HOST_ARCHNAME),ppc64le)
+	CFLAGS += -mcpu=power8 -maltivec
+endif
+ifeq ($(HOST_ARCHNAME),ppc32le)
+	CFLAGS += -m32
 endif
 ifeq ($(HOST_ARCHNAME),arm64)
 	HOST_KERNEL := $(ASM_ARM64)
@@ -90,6 +104,16 @@ ifeq ($(HOST_ARCHNAME),ppc64be)
 else
 	CC_PPC64BE ?= powerpc64-linux-gnu-gcc
 endif
+ifeq ($(HOST_ARCHNAME),ppc32le)
+	CC_PPC32LE ?= $(CC)
+else
+	CC_PPC32LE ?= powerpc64le-linux-gnu-gcc
+endif
+ifeq ($(HOST_ARCHNAME),ppc64le)
+	CC_PPC64LE ?= $(CC)
+else
+	CC_PPC64LE ?= powerpc64le-linux-gnu-gcc
+endif
 # Windows uses MinGW.
 CC_WINDOWS_AMD64 ?= x86_64-w64-mingw32-gcc
 CC_WINDOWS_I386  ?= i686-w64-mingw32-gcc
@@ -98,10 +122,10 @@ NATIVE_BIN := $(DIST)/fossbench-$(OSNAME)-$(HOST_ARCHNAME)
 
 # Plain make builds for this computer.
 .DEFAULT_GOAL := native
-.PHONY: all native linux-arm64 linux-amd64 linux-i386 linux-ppc32be linux-ppc64be macos-arm64 macos-amd64 windows-amd64 windows-i386 bench test clean
+.PHONY: all native linux-arm64 linux-amd64 linux-i386 linux-ppc32be linux-ppc64be linux-ppc32le linux-ppc64le macos-arm64 macos-amd64 windows-amd64 windows-i386 bench test clean
 
 # Build the release targets.
-all: linux-arm64 linux-amd64 linux-i386 linux-ppc32be linux-ppc64be windows-amd64 windows-i386
+all: linux-arm64 linux-amd64 linux-i386 linux-ppc32be linux-ppc64be linux-ppc32le linux-ppc64le windows-amd64 windows-i386
 
 # Build for this computer.
 native: $(NATIVE_BIN)
@@ -111,6 +135,8 @@ linux-amd64: $(DIST)/fossbench-linux-amd64
 linux-i386: $(DIST)/fossbench-linux-i386
 linux-ppc32be: $(DIST)/fossbench-linux-ppc32be
 linux-ppc64be: $(DIST)/fossbench-linux-ppc64be
+linux-ppc32le: $(DIST)/fossbench-linux-ppc32le
+linux-ppc64le: $(DIST)/fossbench-linux-ppc64le
 macos-arm64: $(DIST)/fossbench-macos-arm64
 macos-amd64: $(DIST)/fossbench-macos-amd64
 windows-amd64: $(DIST)/fossbench-windows-amd64.exe
@@ -134,6 +160,14 @@ $(DIST)/fossbench-linux-ppc32be: $(DRIVER) $(DRIVER_DEPS) $(ASM_PPC32) | $(DIST)
 
 $(DIST)/fossbench-linux-ppc64be: $(DRIVER) $(DRIVER_DEPS) $(ASM_PPC64) | $(DIST)
 	$(CC_PPC64BE) -mcpu=970 -maltivec $(CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_PPC64) $(LDLIBS)
+	@echo "built $@"
+
+$(DIST)/fossbench-linux-ppc32le: $(DRIVER) $(DRIVER_DEPS) $(ASM_PPC32LE) | $(DIST)
+	$(CC_PPC32LE) -m32 $(CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_PPC32LE) $(LDLIBS)
+	@echo "built $@"
+
+$(DIST)/fossbench-linux-ppc64le: $(DRIVER) $(DRIVER_DEPS) $(ASM_PPC64LE) | $(DIST)
+	$(CC_PPC64LE) -mcpu=power8 -maltivec $(CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_PPC64LE) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossbench-macos-arm64: $(DRIVER) $(DRIVER_DEPS) $(ASM_ARM64) | $(DIST)
@@ -167,6 +201,12 @@ ifeq ($(OSNAME)-$(HOST_ARCHNAME),linux-ppc32be)
 NATIVE_HAS_RULE := yes
 endif
 ifeq ($(OSNAME)-$(HOST_ARCHNAME),linux-ppc64be)
+NATIVE_HAS_RULE := yes
+endif
+ifeq ($(OSNAME)-$(HOST_ARCHNAME),linux-ppc32le)
+NATIVE_HAS_RULE := yes
+endif
+ifeq ($(OSNAME)-$(HOST_ARCHNAME),linux-ppc64le)
 NATIVE_HAS_RULE := yes
 endif
 ifeq ($(OSNAME)-$(HOST_ARCHNAME),macos-arm64)

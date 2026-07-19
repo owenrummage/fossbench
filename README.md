@@ -29,6 +29,8 @@ score weights. Version 0.1 and 0.2 scores are not comparable.
 | x86 32-bit | i386 with SSE2 |
 | PowerPC 32-bit, big-endian | scalar fallback with runtime-selected extensions |
 | PowerPC 64-bit, big-endian | PowerPC 970 with AltiVec |
+| PowerPC 32-bit, little-endian | scalar fallback with runtime-selected extensions |
+| PowerPC 64-bit, little-endian | POWER8 with AltiVec/VSX |
 
 Linux, macOS, and Windows are supported. Send a patch if a supported target
 fails.
@@ -56,6 +58,8 @@ names. Override them when needed:
 ```sh
 make linux-arm64 CC_ARM64=aarch64-linux-gnu-gcc
 make linux-ppc32be CC_PPC32BE=powerpc-linux-gnu-gcc
+make linux-ppc64le CC_PPC64LE=powerpc64le-linux-gnu-gcc
+make linux-ppc32le CC_PPC32LE=powerpc64le-linux-gnu-gcc
 make windows-amd64 CC_WINDOWS_AMD64=x86_64-w64-mingw32-gcc
 ```
 
@@ -169,5 +173,7 @@ src/kernels/fossbench-amd64.S      x86-64 kernels
 src/kernels/fossbench-i386.S       i386 kernels
 src/kernels/fossbench-ppc32be.S    32-bit big-endian PowerPC kernels
 src/kernels/fossbench-ppc64be.S    64-bit big-endian PowerPC kernels
+src/kernels/fossbench-ppc32le.S    32-bit little-endian PowerPC kernels
+src/kernels/fossbench-ppc64le.S    64-bit little-endian PowerPC kernels
 src/test_kernels.c                 kernel correctness suite
 ```
