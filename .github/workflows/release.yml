@@ -125,8 +125,12 @@ jobs:
             TLS_CFLAGS="-I$GITHUB_WORKSPACE/openssl-static/include" \
             TLS_LDLIBS="$OPENSSL_LIBDIR/libssl.a $OPENSSL_LIBDIR/libcrypto.a $EXTRA_STATIC_LIBS"
           file "dist/fossbench-${{ matrix.target }}"
-          if ! file "dist/fossbench-${{ matrix.target }}" | grep -q 'statically linked'; then
-            echo 'Linux release is dynamically linked' >&2
+          if ! file "dist/fossbench-${{ matrix.target }}" | grep -q 'dynamically linked'; then
+            echo 'Linux release uses static glibc, which is unsafe with NSS-based DNS' >&2
+            exit 1
+          fi
+          if readelf -d "dist/fossbench-${{ matrix.target }}" | grep -E 'NEEDED.*lib(ssl|crypto)'; then
+            echo 'Linux release uses dynamic OpenSSL' >&2
             exit 1
           fi
           if [ "${{ matrix.target }}" != linux-ppc32be ]; then

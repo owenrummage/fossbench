@@ -157,8 +157,12 @@ extern uint64_t fb_chase(void **ptrs, uint64_t steps);
 #  define CHASE_DETAIL	"dependent-load pointer chase, 16 MiB"
 #endif
 
-#define MIN_SECONDS	2.0			/* Minimum run time. */
-#define REPEATS		3			/* Number of tries. */
+#ifndef MIN_SECONDS
+#  define MIN_SECONDS	2.0			/* Minimum run time. */
+#endif
+#ifndef REPEATS
+#  define REPEATS	3			/* Number of tries. */
+#endif
 
 /* Numbers used to calculate scores. */
 
