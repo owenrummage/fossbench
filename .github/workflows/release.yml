@@ -39,9 +39,10 @@ jobs:
             openssl_target: linux-x86
             cross_prefix: ''
           - target: linux-arm64
-            os: ubuntu-24.04
+            os: ubuntu-24.04-arm
             openssl_target: linux-aarch64
-            cross_prefix: aarch64-linux-gnu-
+            cross_prefix: ''
+            openssl_options: no-asm
           - target: linux-ppc32be
             os: ubuntu-24.04
             openssl_target: linux-ppc
@@ -66,12 +67,6 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
-
-      - name: Install the Linux ARM64 cross-compiler
-        if: matrix.target == 'linux-arm64'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes gcc-aarch64-linux-gnu
 
       - name: Install the Linux i386 multilib compiler
         if: matrix.target == 'linux-i386'
@@ -103,6 +98,7 @@ jobs:
           OPENSSL_VERSION: 3.5.7
           OPENSSL_TARGET: ${{ matrix.openssl_target }}
           CROSS_PREFIX: ${{ matrix.cross_prefix }}
+          OPENSSL_OPTIONS: ${{ matrix.openssl_options }}
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.target == 'macos-amd64' && '10.5' || '' }}
         run: |
           curl --fail --location --retry 3 \
@@ -111,7 +107,7 @@ jobs:
           tar -xzf openssl.tar.gz
           cd "openssl-${OPENSSL_VERSION}"
           CROSS_COMPILE="$CROSS_PREFIX" ./Configure "$OPENSSL_TARGET" \
-            no-shared no-tests no-module no-dso \
+            no-shared no-tests no-module no-dso $OPENSSL_OPTIONS \
             --prefix="$GITHUB_WORKSPACE/openssl-static" \
             --openssldir=/etc/ssl
           make -j3 build_sw
@@ -133,6 +129,7 @@ jobs:
             echo 'Linux release is dynamically linked' >&2
             exit 1
           fi
+          "dist/fossbench-${{ matrix.target }}" --help
 
       - name: Build macOS executable with static OpenSSL
         if: startsWith(matrix.target, 'macos-')
