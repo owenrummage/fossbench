@@ -14,6 +14,7 @@ ASM_ARM64 := src/kernels/fossbench-arm64.S
 ASM_AMD64 := src/kernels/fossbench-amd64.S
 ASM_I386  := src/kernels/fossbench-i386.S
 ASM_PPC32 := src/kernels/fossbench-ppc32be.S
+SRC_PPC32 := src/kernels/fossbench-ppc32be-chacha.c
 ASM_PPC64 := src/kernels/fossbench-ppc64be.S
 ASM_PPC32LE := src/kernels/fossbench-ppc32le.S
 ASM_PPC64LE := src/kernels/fossbench-ppc64le.S
@@ -37,7 +38,7 @@ else ifneq (,$(filter ppcle powerpcle ppc32le powerpc32le,$(HOST_ARCH)))
 	HOST_KERNEL   := $(ASM_PPC32LE)
 else ifneq (,$(filter ppc powerpc ppc32 powerpc32,$(HOST_ARCH)))
 	HOST_ARCHNAME := ppc32be
-	HOST_KERNEL   := $(ASM_PPC32)
+	HOST_KERNEL   := $(ASM_PPC32) $(SRC_PPC32)
 else ifneq (,$(filter ppc64 powerpc64,$(HOST_ARCH)))
 	HOST_ARCHNAME := ppc64be
 	HOST_KERNEL   := $(ASM_PPC64)
@@ -154,8 +155,8 @@ $(DIST)/fossbench-linux-i386: $(DRIVER) $(DRIVER_DEPS) $(ASM_I386) | $(DIST)
 	$(CC_I386) -m32 -march=pentium4 -fno-pie -no-pie $(CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_I386) $(LDLIBS)
 	@echo "built $@"
 
-$(DIST)/fossbench-linux-ppc32be: $(DRIVER) $(DRIVER_DEPS) $(ASM_PPC32) | $(DIST)
-	$(CC_PPC32BE) $(CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_PPC32) $(LDLIBS)
+$(DIST)/fossbench-linux-ppc32be: $(DRIVER) $(DRIVER_DEPS) $(ASM_PPC32) $(SRC_PPC32) | $(DIST)
+	$(CC_PPC32BE) $(CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_PPC32) $(SRC_PPC32) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossbench-linux-ppc64be: $(DRIVER) $(DRIVER_DEPS) $(ASM_PPC64) | $(DIST)

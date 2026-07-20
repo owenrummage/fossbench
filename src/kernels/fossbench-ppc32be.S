@@ -1121,11 +1121,11 @@ fb_compress:
         .long .LC46
         .section        ".text"
         .align 2
-        .globl fb_chacha20
+        .globl fb_chacha20_altivec
 .LCL5:
         .long .LCTOC1-.LCF5
-        .type   fb_chacha20, @function
-fb_chacha20:
+        .type   fb_chacha20_altivec, @function
+fb_chacha20_altivec:
         .cfi_startproc
         stwu 1,-608(1)
         .cfi_def_cfa_offset 608
@@ -1966,7 +1966,7 @@ fb_chacha20:
         stb 9,63(23)
         b .L133
         .cfi_endproc
-        .size   fb_chacha20, .-fb_chacha20
+        .size   fb_chacha20_altivec, .-fb_chacha20_altivec
         .section        ".got2","aw"
 .LC50:
         .long .LC49
