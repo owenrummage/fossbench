@@ -128,14 +128,18 @@ jobs:
           if [[ "${{ matrix.target }}" == windows-* ]]; then
             bin="$bin.exe"
           fi
-          tar -czf "$GITHUB_WORKSPACE/fossbench-${{ matrix.target }}.tar.gz" \
-            -C "$GITHUB_WORKSPACE/dist" "$bin"
+          if [[ "${{ matrix.target }}" == linux-* ]]; then
+            tar -czf "$GITHUB_WORKSPACE/fossbench-${{ matrix.target }}.tar.gz" \
+              -C "$GITHUB_WORKSPACE/dist" "$bin"
+          else
+            (cd "$GITHUB_WORKSPACE/dist" && zip -q "$GITHUB_WORKSPACE/fossbench-${{ matrix.target }}.zip" "$bin")
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: fossbench-${{ matrix.target }}
-          path: fossbench-${{ matrix.target }}.tar.gz
+          path: fossbench-${{ matrix.target }}.*
           if-no-files-found: error
 
   release:
@@ -156,7 +160,7 @@ jobs:
 
       - name: Create checksums
         working-directory: release
-        run: sha256sum fossbench-*.tar.gz > SHA256SUMS
+        run: sha256sum fossbench-*.tar.gz fossbench-*.zip > SHA256SUMS
 
       - name: Create release and attach artifacts
         env:
@@ -167,7 +171,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --yes 2>/dev/null || true
           gh release create "$RELEASE_TAG" \
-            release/fossbench-*.tar.gz \
+            release/fossbench-*.tar.gz release/fossbench-*.zip \
             release/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --title "Release $RELEASE_TAG" \
