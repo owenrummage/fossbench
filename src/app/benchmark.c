@@ -38,7 +38,7 @@
 #ifndef FB_API_BASE_URL
 #  define FB_API_BASE_URL "http://fossbench.net"
 #endif
-#define FB_VERSION "0.3.0"
+#define FB_VERSION "0.4.0"
 
 /*
  * Native Integer Math and Memory Bandwidth are the only two *measured*
@@ -70,9 +70,9 @@
 #  define D_FP   "double: mulsd/addsd, divsd, sqrtsd"
 #  define D_SIMD "SSE2: 128-bit integer + float"
 #elif defined(__i386__) || defined(_M_IX86)
-#  define D_INT  "Pentium 4 integer ALU and software 64-bit arithmetic"
+#  define D_INT  "i386 integer ALU and software 64-bit arithmetic"
 #  define D_FP   "x87 scalar double-precision floating point"
-#  define D_SIMD "SSE2: 128-bit integer vectors"
+#  define D_SIMD "scalar extended-instruction fallback"
 #elif defined(__powerpc64__)
 #  define D_INT  "64-bit PowerPC integer ALU"
 #  define D_FP   "PowerPC scalar double-precision floating point"
@@ -131,6 +131,18 @@ extern uint64_t fb_chacha20(uint8_t *buf, uint64_t len,
 extern uint64_t fb_physics(double *bodies, uint64_t n, uint64_t steps);
 extern uint64_t fb_sort(uint32_t *a, uint64_t n);
 extern uint64_t fb_chase(void **ptrs, uint64_t steps);
+
+/* GCC/Clang optimised C copies used for the REAL score. */
+extern uint64_t fb_c_int_math(uint64_t iters);
+extern uint64_t fb_c_fp_math(uint64_t iters);
+extern uint64_t fb_c_primes(uint64_t limit, uint8_t *sieve);
+extern uint64_t fb_c_simd(uint64_t iters, void *buf);
+extern uint64_t fb_c_compress(const uint8_t *src, uint64_t len, uint32_t *ht);
+extern uint64_t fb_c_chacha20(uint8_t *buf, uint64_t len,
+			      const uint8_t key[32], uint64_t rounds);
+extern uint64_t fb_c_physics(double *bodies, uint64_t n, uint64_t steps);
+extern uint64_t fb_c_sort(uint32_t *a, uint64_t n);
+extern uint64_t fb_c_chase(void **ptrs, uint64_t steps);
 
 /* Test sizes and timing settings. */
 
@@ -320,6 +332,7 @@ static uint8_t  *g_cipher_src;	/* pristine plaintext, copied per-core. */
 static uint8_t  *g_simd_src;	/* pristine NEON seed, copied per-core. */
 static double   *g_bodies_src;	/* pristine initial conditions. */
 static uint32_t *g_sort_src;	/* pristine unsorted data. */
+static int g_c_backend;		/* zero = RAW assembly, one = REAL C. */
 
 
 /* Synthesise a compressible corpus. */
@@ -466,7 +479,7 @@ struct test {
 static uint64_t run_int(uint64_t n, struct workspace *ws)
 {
 	(void)ws;
-	return fb_int_math(n * 100000);
+	return g_c_backend ? fb_c_int_math(n * 100000) : fb_int_math(n * 100000);
 }
 
 FB_SCALAR_KERNEL
@@ -492,37 +505,42 @@ static uint64_t run_int32(uint64_t n, struct workspace *ws)
 static uint64_t run_fp(uint64_t n, struct workspace *ws)
 {
 	(void)ws;
-	return fb_fp_math(n * 100000);
+	return g_c_backend ? fb_c_fp_math(n * 100000) : fb_fp_math(n * 100000);
 }
 static uint64_t run_primes(uint64_t n, struct workspace *ws)
 {
 	uint64_t c = 0;
 	for (uint64_t i = 0; i < n; i++)
-		c += fb_primes(PRIME_LIMIT, ws->sieve);
+		c += g_c_backend ? fb_c_primes(PRIME_LIMIT, ws->sieve) :
+				     fb_primes(PRIME_LIMIT, ws->sieve);
 	return c;
 }
 static uint64_t run_simd(uint64_t n, struct workspace *ws)
 {
 	/* Reset the SIMD buffer before running. */
 	memcpy(ws->simd_buf, g_simd_src, SIMD_BUF);
-	return fb_simd(n * 100000, ws->simd_buf);
+	return g_c_backend ? fb_c_simd(n * 100000, ws->simd_buf) :
+			     fb_simd(n * 100000, ws->simd_buf);
 }
 static uint64_t run_compress(uint64_t n, struct workspace *ws)
 {
 	uint64_t c = 0;
 	for (uint64_t i = 0; i < n; i++)
-		c += fb_compress(g_corpus, COMPRESS_LEN, ws->ht);
+		c += g_c_backend ? fb_c_compress(g_corpus, COMPRESS_LEN, ws->ht) :
+				     fb_compress(g_corpus, COMPRESS_LEN, ws->ht);
 	return c;
 }
 static uint64_t run_crypto(uint64_t n, struct workspace *ws)
 {
-	return fb_chacha20(ws->cipher_buf, CIPHER_LEN, g_key, n);
+	return g_c_backend ? fb_c_chacha20(ws->cipher_buf, CIPHER_LEN, g_key, n) :
+			     fb_chacha20(ws->cipher_buf, CIPHER_LEN, g_key, n);
 }
 static uint64_t run_physics(uint64_t n, struct workspace *ws)
 {
 	/* Reset the physics data before running. */
 	memcpy(ws->bodies, g_bodies_src, NBODY_N * 8 * sizeof(double));
-	return fb_physics(ws->bodies, NBODY_N, n);
+	return g_c_backend ? fb_c_physics(ws->bodies, NBODY_N, n) :
+			     fb_physics(ws->bodies, NBODY_N, n);
 }
 static uint64_t run_sort(uint64_t n, struct workspace *ws)
 {
@@ -530,13 +548,15 @@ static uint64_t run_sort(uint64_t n, struct workspace *ws)
 	for (uint64_t i = 0; i < n; i++) {
 		/* Reset the sort data before running. */
 		memcpy(ws->sort_work, g_sort_src, SORT_N * sizeof(uint32_t));
-		c ^= fb_sort(ws->sort_work, SORT_N);
+		c ^= g_c_backend ? fb_c_sort(ws->sort_work, SORT_N) :
+				     fb_sort(ws->sort_work, SORT_N);
 	}
 	return c;
 }
 static uint64_t run_chase(uint64_t n, struct workspace *ws)
 {
-	return fb_chase(ws->chase, n * 1000000);
+	return g_c_backend ? fb_c_chase(ws->chase, n * 1000000) :
+			     fb_chase(ws->chase, n * 1000000);
 }
 
 FB_SCALAR_KERNEL
@@ -751,6 +771,8 @@ static void print_header(const struct system_info *info)
 	printf("  model:     %s\n", info->model[0] ? info->model : "unknown");
 	printf("  cores:     %ld physical / %ld threads\n", info->cpu_cores, info->cpu_threads);
 	printf("  memory:    %ld MB\n", info->memory_mb);
+	printf("  caches:    L1 %ld KB / L2 %ld KB / L3 %ld KB\n",
+	       info->l1_cache_kb, info->l2_cache_kb, info->l3_cache_kb);
 	printf("  OS:        %s (%s)\n", info->operating_system, hw_arch_name());
 	printf("  kernel:    %s\n", info->kernel[0] ? info->kernel : "unknown");
 	printf("  compiler:  %s\n", info->compiler);
@@ -763,7 +785,8 @@ static void print_header(const struct system_info *info)
 
 int fossbench_run(int verbose, int upload_mode, int system_check)
 {
-	struct result multi[NTESTS], single[NTESTS];
+	struct result raw_multi[NTESTS], raw_single[NTESTS];
+	struct result real_multi[NTESTS], real_single[NTESTS];
 	struct system_info system_info;
 	struct background_metrics background;
 	double benchmark_started;
@@ -795,24 +818,45 @@ int fossbench_run(int verbose, int upload_mode, int system_check)
 
 	print_header(&system_info);
 
+	printf("  RAW score suite (architecture assembly)\n");
+	g_c_backend = 0;
 	for (i = 0; i < NTESTS; i++) {
 		printf("  %-24s", tests[i].name);
 		fflush(stdout);
 
 		/* Run every test with all cores and one core. */
-		multi[i]  = run_test(&tests[i], (int)g_ncores);
-		single[i] = run_test(&tests[i], 1);
+		raw_multi[i]  = run_test(&tests[i], (int)g_ncores);
+		raw_single[i] = run_test(&tests[i], 1);
 
 		printf(" %12.1f  %-11s %7.2fs\n",
-		       display_metric(&tests[i], &multi[i]), tests[i].unit,
-		       multi[i].seconds);
+		       display_metric(&tests[i], &raw_multi[i]), tests[i].unit,
+		       raw_multi[i].seconds);
 		if (verbose)
 			printf("  %-24s   %s\n"
 			       "  %-24s   1-core: %.1f %s   %ld-core: %.1f %s\n",
 			       "", tests[i].detail, "",
-			       display_metric(&tests[i], &single[i]), tests[i].unit,
-			       g_ncores, display_metric(&tests[i], &multi[i]), tests[i].unit);
+			       display_metric(&tests[i], &raw_single[i]), tests[i].unit,
+			       g_ncores, display_metric(&tests[i], &raw_multi[i]), tests[i].unit);
 		fflush(stdout);
+	}
+
+	printf("  --------------------------------------------------------------------------\n");
+	printf("  REAL score suite (optimised portable C)\n");
+	g_c_backend = 1;
+	for (i = 0; i < NTESTS; i++) {
+		printf("  %-24s", tests[i].name);
+		fflush(stdout);
+		real_multi[i] = run_test(&tests[i], (int)g_ncores);
+		real_single[i] = run_test(&tests[i], 1);
+		printf(" %12.1f  %-11s %7.2fs\n",
+		       display_metric(&tests[i], &real_multi[i]), tests[i].unit,
+		       real_multi[i].seconds);
+		if (verbose)
+			printf("  %-24s   %s\n"
+			       "  %-24s   1-core: %.1f %s   %ld-core: %.1f %s\n",
+			       "", tests[i].detail, "",
+			       display_metric(&tests[i], &real_single[i]), tests[i].unit,
+			       g_ncores, display_metric(&tests[i], &real_multi[i]), tests[i].unit);
 	}
 
 	printf("  --------------------------------------------------------------------------\n");
@@ -845,7 +889,8 @@ int fossbench_run(int verbose, int upload_mode, int system_check)
 #if defined(FB_NO_UPLOAD)
 			fprintf(stderr, "  Upload support is disabled in this build.\n");
 #else
-			upload_results(&system_info, multi, single, duration_ms, &background);
+			upload_results(&system_info, raw_multi, raw_single,
+				       real_multi, real_single, duration_ms, &background);
 #endif
 		}
 	}

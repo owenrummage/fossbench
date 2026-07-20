@@ -26,7 +26,7 @@ score weights. Version 0.1 and 0.2 scores are not comparable.
 |---|---|
 | ARM64 | ARMv8-A with NEON |
 | x86-64 | x86-64 with SSE2 |
-| x86 32-bit | i386 with SSE2 |
+| x86 32-bit | original i386 ISA (scalar fallback) |
 | PowerPC 32-bit, big-endian | scalar fallback with runtime-selected extensions |
 | PowerPC 64-bit, big-endian | PowerPC 970 with AltiVec |
 | PowerPC 32-bit, little-endian | scalar fallback with runtime-selected extensions |
@@ -171,7 +171,7 @@ src/app/benchmark.h                interface used by main.c
 src/app/upload.c                   API payload and network transport
 src/kernels/fossbench-arm64.S      ARM64 kernels
 src/kernels/fossbench-amd64.S      x86-64 kernels
-src/kernels/fossbench-i386.S       i386 kernels
+src/kernels/fossbench-i386.c       portable scalar i386 kernels
 src/kernels/fossbench-ppc32be.S    32-bit big-endian PowerPC kernels
 src/kernels/fossbench-ppc64be.S    64-bit big-endian PowerPC kernels
 src/kernels/fossbench-ppc32le.S    32-bit little-endian PowerPC kernels

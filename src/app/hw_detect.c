@@ -92,6 +92,39 @@ static int apple_m_name(const char *text, char *dst, size_t cap)
 
 /* Linux device trees identify Apple Silicon by its SoC code. */
 #if defined(__linux__)
+static int read_first_property(const char *path, char *dst, size_t cap);
+
+static long cache_size_kb(const char *text)
+{
+	char *end;
+	long value = strtol(text, &end, 10);
+	if (value <= 0) return 0;
+	while (*end && isspace((unsigned char)*end)) end++;
+	if (*end == 'M' || *end == 'm') value *= 1024;
+	return value;
+}
+
+static void linux_detect_caches(struct system_info *info)
+{
+	int index;
+	for (index = 0; index < 32; index++) {
+		char path[160], level_text[32], size_text[32];
+		long level, kb;
+		snprintf(path, sizeof path,
+			 "/sys/devices/system/cpu/cpu0/cache/index%d/level", index);
+		if (!read_first_property(path, level_text, sizeof level_text)) continue;
+		snprintf(path, sizeof path,
+			 "/sys/devices/system/cpu/cpu0/cache/index%d/size", index);
+		if (!read_first_property(path, size_text, sizeof size_text)) continue;
+		level = strtol(level_text, NULL, 10);
+		kb = cache_size_kb(size_text);
+		/* L1 instruction and data caches are separate and should be added. */
+		if (level == 1) info->l1_cache_kb += kb;
+		else if (level == 2 && kb > info->l2_cache_kb) info->l2_cache_kb = kb;
+		else if (level == 3 && kb > info->l3_cache_kb) info->l3_cache_kb = kb;
+	}
+}
+
 static int apple_m_name_from_soc(const char *text, char *dst, size_t cap)
 {
 	static const struct { const char *soc, *name; } chips[] = {
@@ -505,6 +538,7 @@ void hw_detect_system(struct system_info *info)
 			fclose(f);
 		}
 	}
+	linux_detect_caches(info);
 	{
 		FILE *f = fopen("/etc/os-release", "r"); char line[512];
 		if (f) { while (fgets(line, sizeof(line), f)) if (!strncmp(line, "PRETTY_NAME=", 12)) {
@@ -540,6 +574,20 @@ void hw_detect_system(struct system_info *info)
 		sysctlbyname("hw.model", info->model, &model_n, NULL, 0);
 		if (sysctlbyname("hw.physicalcpu", &cores, &cn, NULL, 0) == 0) info->cpu_cores = cores;
 		if (sysctlbyname("hw.memsize", &mem, &mn, NULL, 0) == 0) info->memory_mb = (long)(mem / 1024 / 1024);
+		{
+			uint64_t bytes = 0; size_t bytes_n = sizeof bytes;
+			if (sysctlbyname("hw.l1dcachesize", &bytes, &bytes_n, NULL, 0) == 0)
+				info->l1_cache_kb += (long)(bytes / 1024);
+			bytes = 0; bytes_n = sizeof bytes;
+			if (sysctlbyname("hw.l1icachesize", &bytes, &bytes_n, NULL, 0) == 0)
+				info->l1_cache_kb += (long)(bytes / 1024);
+			bytes = 0; bytes_n = sizeof bytes;
+			if (sysctlbyname("hw.l2cachesize", &bytes, &bytes_n, NULL, 0) == 0)
+				info->l2_cache_kb = (long)(bytes / 1024);
+			bytes = 0; bytes_n = sizeof bytes;
+			if (sysctlbyname("hw.l3cachesize", &bytes, &bytes_n, NULL, 0) == 0)
+				info->l3_cache_kb = (long)(bytes / 1024);
+		}
 	}
 	{
 		char product[64] = ""; size_t pn = sizeof(product);
@@ -550,6 +598,30 @@ void hw_detect_system(struct system_info *info)
 			snprintf(info->kernel, sizeof(info->kernel), "%.62s %.64s", u.sysname, u.release);
 	}
 #elif defined(_WIN32)
+	{
+		DWORD bytes = 0;
+		PSYSTEM_LOGICAL_PROCESSOR_INFORMATION entries = NULL;
+		if (!GetLogicalProcessorInformation(NULL, &bytes) &&
+		    GetLastError() == ERROR_INSUFFICIENT_BUFFER) {
+			entries = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION)malloc(bytes);
+			if (entries && GetLogicalProcessorInformation(entries, &bytes)) {
+				DWORD i, count = bytes / sizeof *entries;
+				long cores = 0;
+				for (i = 0; i < count; i++) {
+					if (entries[i].Relationship == RelationProcessorCore) cores++;
+					else if (entries[i].Relationship == RelationCache) {
+						CACHE_DESCRIPTOR c = entries[i].Cache;
+						long kb = (long)(c.Size / 1024);
+						if (c.Level == 1 && kb > info->l1_cache_kb) info->l1_cache_kb = kb;
+						else if (c.Level == 2 && kb > info->l2_cache_kb) info->l2_cache_kb = kb;
+						else if (c.Level == 3 && kb > info->l3_cache_kb) info->l3_cache_kb = kb;
+					}
+				}
+				if (cores > 0) info->cpu_cores = cores;
+			}
+			free(entries);
+		}
+	}
 	{
 		HKEY key;
 		char brand[sizeof info->cpu] = "";
@@ -570,6 +642,19 @@ void hw_detect_system(struct system_info *info)
 		long cores = win_physical_cores();
 		if (cores > 0)
 			info->cpu_cores = cores;
+	}
+	{
+		HKEY key; char product[sizeof info->model] = "";
+		DWORD type = 0, bytes = sizeof product;
+		if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+		    "HARDWARE\\DESCRIPTION\\System\\BIOS", 0, KEY_QUERY_VALUE, &key) == ERROR_SUCCESS) {
+			if (RegQueryValueExA(key, "SystemProductName", NULL, &type,
+			    (BYTE *)product, &bytes) == ERROR_SUCCESS && type == REG_SZ) {
+				product[sizeof product - 1] = '\0'; trim(product);
+				if (product[0]) snprintf(info->model, sizeof info->model, "%s", product);
+			}
+			RegCloseKey(key);
+		}
 	}
 	{
 		MEMORYSTATUSEX ms;
@@ -617,4 +702,33 @@ void hw_detect_system(struct system_info *info)
 	}
 #endif
 #endif
+	/* Portable POSIX fallbacks cover BSDs and other Unix systems where the
+	 * platform-specific branches above are unavailable. */
+#if !defined(_WIN32) && !defined(__linux__) && !defined(__APPLE__)
+	{
+		long pages = sysconf(_SC_PHYS_PAGES), page_size = sysconf(_SC_PAGESIZE);
+		if (pages > 0 && page_size > 0) info->memory_mb = (pages / 1024) * (page_size / 1024);
+	}
+# if defined(_SC_LEVEL1_DCACHE_SIZE)
+	{ long v = sysconf(_SC_LEVEL1_DCACHE_SIZE); if (v > 0) info->l1_cache_kb += v / 1024; }
+# endif
+# if defined(_SC_LEVEL1_ICACHE_SIZE)
+	{ long v = sysconf(_SC_LEVEL1_ICACHE_SIZE); if (v > 0) info->l1_cache_kb += v / 1024; }
+# endif
+# if defined(_SC_LEVEL2_CACHE_SIZE)
+	{ long v = sysconf(_SC_LEVEL2_CACHE_SIZE); if (v > 0) info->l2_cache_kb = v / 1024; }
+# endif
+# if defined(_SC_LEVEL3_CACHE_SIZE)
+	{ long v = sysconf(_SC_LEVEL3_CACHE_SIZE); if (v > 0) info->l3_cache_kb = v / 1024; }
+# endif
+#endif
+	/* Never emit empty identity fields: these values are used by the website
+	 * for processor matching and display on platforms with sparse APIs. */
+	if (!info->cpu[0]) snprintf(info->cpu, sizeof info->cpu, "%s", HW_ARCH);
+	if (!info->model[0]) snprintf(info->model, sizeof info->model, "%s", info->cpu);
+	if (!info->kernel[0]) snprintf(info->kernel, sizeof info->kernel, "%s", info->operating_system);
+	if (info->memory_mb < 1) info->memory_mb = 1;
+	if (info->l1_cache_kb < 1) info->l1_cache_kb = 1;
+	if (info->l2_cache_kb < 1) info->l2_cache_kb = info->l1_cache_kb;
+	if (info->l3_cache_kb < 1) info->l3_cache_kb = info->l2_cache_kb;
 }
