@@ -40,6 +40,27 @@
 #endif
 #define FB_VERSION "0.3.0"
 
+/*
+ * Native Integer Math and Memory Bandwidth are the only two *measured*
+ * workloads written in C instead of a per-architecture assembly kernel. Because
+ * they were compiled with whatever optimizer the build used, auto-vectorization
+ * made their results depend on the compiler rather than the CPU: newer Clang
+ * roughly tripled the integer result and inflated the STREAM triad by ~3x,
+ * so the same machine scored very differently across builds. Pin both to
+ * deterministic scalar code so every compiler measures the same work. These two
+ * carry weight in web/src/scoring.js, so their stability matters to the score.
+ */
+#if defined(__GNUC__) && !defined(__clang__)
+#  define FB_SCALAR_KERNEL __attribute__((optimize("O2", "no-tree-vectorize", "no-tree-slp-vectorize")))
+#else
+#  define FB_SCALAR_KERNEL
+#endif
+#if defined(__clang__)
+#  define FB_SCALAR_LOOP _Pragma("clang loop vectorize(disable) interleave(disable)")
+#else
+#  define FB_SCALAR_LOOP
+#endif
+
 #if defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64)
 #  define D_INT  "64-bit ALU: madd, umulh, udiv, bitops"
 #  define D_FP   "double: fmadd, fdiv, fsqrt"
@@ -448,12 +469,14 @@ static uint64_t run_int(uint64_t n, struct workspace *ws)
 	return fb_int_math(n * 100000);
 }
 
+FB_SCALAR_KERNEL
 static uint64_t run_int32(uint64_t n, struct workspace *ws)
 {
 	uint32_t a = 0x9e3779b9u, b = 0xbf58476du;
 	uint32_t c = 0x94d049bbu, d = 0x2545f491u;
 	uint64_t i, iters = n * 100000;
 	(void)ws;
+	FB_SCALAR_LOOP
 	for (i = 0; i < iters; i++) {
 		a = a * 0xdeadbeefu + b;
 		b = b * 0xdeadbeefu + c;
@@ -516,6 +539,7 @@ static uint64_t run_chase(uint64_t n, struct workspace *ws)
 	return fb_chase(ws->chase, n * 1000000);
 }
 
+FB_SCALAR_KERNEL
 static uint64_t run_stream(uint64_t n, struct workspace *ws)
 {
 	uint64_t pass, checksum = 0;
@@ -525,6 +549,7 @@ static uint64_t run_stream(uint64_t n, struct workspace *ws)
 		float *restrict a = ws->stream_a;
 		float *restrict b = ws->stream_b;
 		float *restrict c = ws->stream_c;
+		FB_SCALAR_LOOP
 		for (i = 0; i < STREAM_N; i++)
 			c[i] = a[i] + scale * b[i];
 	}
@@ -646,9 +671,9 @@ static struct result run_test(const struct test *t, int threads)
 {
 	struct result r;
 	uint64_t n = t->start_n;
-	double elapsed = 0.0, best = 0.0;
+	double elapsed = 0.0, total = 0.0, average;
 	uint64_t checksum = 0;
-	int i;
+	int i, samples;
 
 	/* Increase the work until it runs long enough. */
 	for (;;) {
@@ -670,8 +695,11 @@ static struct result run_test(const struct test *t, int threads)
 		}
 	}
 
-	/* Keep the fastest run. */
-	best = elapsed;
+	/* Average every measured run. Keeping only the fastest rewarded a single
+	 * lucky sample and hid the run-to-run variation that real machines show;
+	 * the mean is a more representative and reproducible throughput. */
+	total = elapsed;
+	samples = 1;
 	for (i = 1; i < REPEATS; i++) {
 		double t0 = now_seconds();
 		uint64_t c = dispatch(t->run, n, threads);
@@ -685,16 +713,17 @@ static struct result run_test(const struct test *t, int threads)
 				(unsigned long long)checksum);
 			exit(2);
 		}
-		if (e < best)
-			best = e;
+		total += e;
+		samples++;
 	}
+	average = total / samples;
 
-	r.seconds  = best;
+	r.seconds  = average;
 	r.iters    = n;
 	r.checksum = checksum;
 	r.threads  = threads;
 	/* Calculate the total speed. */
-	r.rate     = ((double)threads * (double)n * t->work_per_n) / best / 1e6;
+	r.rate     = ((double)threads * (double)n * t->work_per_n) / average / 1e6;
 	return r;
 }
 

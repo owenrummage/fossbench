@@ -17,6 +17,9 @@
 #endif
 #if defined(_WIN32)
 #  define WIN32_LEAN_AND_MEAN
+#  ifndef _WIN32_WINNT
+#    define _WIN32_WINNT 0x0601		/* GetLogicalProcessorInformationEx (Win7+). */
+#  endif
 #  include <windows.h>
 #  if defined(__i386__) || defined(__x86_64__)
 #    include <cpuid.h>
@@ -251,6 +254,83 @@ static int read_first_property(const char *path, char *dst, size_t cap)
 }
 #endif
 
+#if defined(_WIN32)
+/* Count physical cores. Windows only exposes logical processors through
+ * GetSystemInfo, so with SMT/HyperThreading every count was wrong (an 8-core /
+ * 16-thread part reported 16 cores). Each RelationProcessorCore record returned
+ * by GetLogicalProcessorInformationEx describes exactly one physical core. */
+static long win_physical_cores(void)
+{
+	DWORD length = 0;
+	BYTE *buffer, *p;
+	long cores = 0;
+
+	if (GetLogicalProcessorInformationEx(RelationProcessorCore, NULL, &length))
+		return 0;
+	if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || length == 0)
+		return 0;
+	buffer = malloc(length);
+	if (buffer == NULL)
+		return 0;
+	if (GetLogicalProcessorInformationEx(RelationProcessorCore,
+			(PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)buffer, &length)) {
+		for (p = buffer; p < buffer + length; ) {
+			PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX record =
+				(PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)p;
+			if (record->Size == 0)
+				break;			/* Guard against a malformed run. */
+			if (record->Relationship == RelationProcessorCore)
+				cores++;
+			p += record->Size;
+		}
+	}
+	free(buffer);
+	return cores;
+}
+#endif
+
+#if defined(__linux__)
+/* Count physical cores from sysfs topology. PowerPC (and some ARM) kernels omit
+ * the "physical id" / "core id" fields from /proc/cpuinfo, so those hosts fell
+ * back to the thread count (a POWER8 with SMT8 reported 176 cores instead of
+ * 22). Every thread of a physical core shares one thread-sibling group, and the
+ * lowest thread id in that group uniquely identifies the core -- counting the
+ * distinct groups is correct with SMT, without it, and across clusters whose
+ * core_id numbering restarts (e.g. Apple Silicon under Asahi). */
+static long linux_topology_cores(long max_threads)
+{
+	long seen[4096];
+	int nseen = 0;
+	long cpu, cores = 0;
+
+	for (cpu = 0; cpu < max_threads && cpu < 4096; cpu++) {
+		char path[192], value[256];
+		long first;
+		int i, duplicate = 0;
+
+		snprintf(path, sizeof path,
+			 "/sys/devices/system/cpu/cpu%ld/topology/thread_siblings_list", cpu);
+		if (!read_first_property(path, value, sizeof value)) {
+			snprintf(path, sizeof path,
+				 "/sys/devices/system/cpu/cpu%ld/topology/core_cpus_list", cpu);
+			if (!read_first_property(path, value, sizeof value))
+				continue;
+		}
+		first = strtol(value, NULL, 0);	/* Lowest thread id of this core. */
+		for (i = 0; i < nseen; i++)
+			if (seen[i] == first) {
+				duplicate = 1;
+				break;
+			}
+		if (!duplicate && nseen < 4096) {
+			seen[nseen++] = first;
+			cores++;
+		}
+	}
+	return cores;
+}
+#endif
+
 void hw_detect_system(struct system_info *info)
 {
 	long detected_threads;
@@ -362,6 +442,13 @@ void hw_detect_system(struct system_info *info)
 			fclose(f);
 			if (npairs > 0) info->cpu_cores = npairs;
 		}
+	}
+	/* When /proc/cpuinfo did not distinguish cores from threads (PowerPC, ARM),
+	 * recover the physical core count from sysfs topology. */
+	if (info->cpu_cores == info->cpu_threads) {
+		long cores = linux_topology_cores(info->cpu_threads);
+		if (cores > 0)
+			info->cpu_cores = cores;
 	}
 	if (apple_soc[0])
 		snprintf(info->cpu, sizeof info->cpu, "%s", apple_soc);
@@ -478,6 +565,11 @@ void hw_detect_system(struct system_info *info)
 			}
 			RegCloseKey(key);
 		}
+	}
+	{
+		long cores = win_physical_cores();
+		if (cores > 0)
+			info->cpu_cores = cores;
 	}
 	{
 		MEMORYSTATUSEX ms;
