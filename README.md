@@ -32,12 +32,13 @@ score weights. Version 0.1 and 0.2 scores are not comparable.
 | PowerPC 32-bit, little-endian | scalar fallback with runtime-selected extensions |
 | PowerPC 64-bit, little-endian | POWER8 with AltiVec/VSX |
 
-Linux, macOS, and Windows are supported. Send a patch if a supported target
-fails.
+Linux, macOS, and Windows are supported. The Windows i386 release has a Windows
+XP (NT 5.1) compatibility baseline. Send a patch if a supported target fails.
 
 ## Build
 
-GNU Make, a C compiler, pthreads, and the system math library are required.
+GNU Make, a C compiler, and the system math library are required. POSIX builds
+also require pthreads; Windows builds use native Win32 threads.
 Uploads use plain HTTP and require no TLS library.
 
 Build for the current machine:

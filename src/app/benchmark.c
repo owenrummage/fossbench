@@ -4,9 +4,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include <pthread.h>
-#include <unistd.h>
 #include <ctype.h>
+
+#if defined(_WIN32)
+#  define WIN32_LEAN_AND_MEAN
+#  include <windows.h>
+#  include <tlhelp32.h>
+#  include <winhttp.h>
+#  include <process.h>
+#else
+#  include <pthread.h>
+#  include <unistd.h>
+#endif
 
 #include "benchmark.h"
 #include "hw_detect.h"
@@ -60,10 +69,6 @@
 /* Get the current time. */
 
 #if defined(_WIN32)
-#  define WIN32_LEAN_AND_MEAN
-#  include <windows.h>
-#  include <tlhelp32.h>
-#  include <winhttp.h>
 static double now_seconds(void)
 {
 	LARGE_INTEGER f, t;
@@ -574,19 +579,28 @@ struct job {
 	uint64_t          result;
 };
 
+#if defined(_WIN32)
+static unsigned WINAPI job_entry(void *arg)
+#else
 static void *job_entry(void *arg)
+#endif
 {
 	struct job *j = arg;
 	j->result = j->run(j->n, j->ws);
-	return NULL;
+	return 0;
 }
 
 /* Run a kernel on all requested threads. */
 static uint64_t dispatch(run_fn run, uint64_t n, int threads)
 {
 	struct job *jobs = xalloc((size_t)threads * sizeof *jobs);
+#if defined(_WIN32)
+	HANDLE *tids = threads > 1
+			 ? xalloc((size_t)(threads - 1) * sizeof *tids) : NULL;
+#else
 	pthread_t  *tids = threads > 1
 			 ? xalloc((size_t)(threads - 1) * sizeof *tids) : NULL;
+#endif
 	int i, spawned = 0;
 	uint64_t agg = 0;
 
@@ -596,16 +610,30 @@ static uint64_t dispatch(run_fn run, uint64_t n, int threads)
 		jobs[i].ws  = &g_ws[i];
 	}
 	for (i = 1; i < threads; i++) {
+#if defined(_WIN32)
+		tids[spawned] = (HANDLE)_beginthreadex(NULL, 0, job_entry, &jobs[i], 0, NULL);
+		if (tids[spawned] != NULL)
+			spawned++;
+		else
+			job_entry(&jobs[i]);	/* Run it here if the thread fails. */
+#else
 		if (pthread_create(&tids[spawned], NULL, job_entry, &jobs[i]) == 0)
 			spawned++;
 		else
 			job_entry(&jobs[i]);	/* Run it here if the thread fails. */
+#endif
 	}
 
 	job_entry(&jobs[0]);			/* The main thread does the first job. */
 
-	for (i = 0; i < spawned; i++)
+	for (i = 0; i < spawned; i++) {
+#if defined(_WIN32)
+		WaitForSingleObject(tids[i], INFINITE);
+		CloseHandle(tids[i]);
+#else
 		pthread_join(tids[i], NULL);
+#endif
+	}
 	for (i = 0; i < threads; i++)
 		agg += jobs[i].result;
 

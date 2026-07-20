@@ -111,6 +111,16 @@ jobs:
         run: |
           make "${{ matrix.target }}"
           file "dist/fossbench-${{ matrix.target }}.exe"
+          if [ "${{ matrix.target }}" = windows-i386 ]; then
+            pe="dist/fossbench-windows-i386.exe"
+            i686-w64-mingw32-objdump -p "$pe" > "$RUNNER_TEMP/windows-i386-pe.txt"
+            grep -Eq 'MajorSubsystemVersion[[:space:]]+5' "$RUNNER_TEMP/windows-i386-pe.txt"
+            grep -Eq 'MinorSubsystemVersion[[:space:]]+1' "$RUNNER_TEMP/windows-i386-pe.txt"
+            if grep -Eq 'GetTickCount64|InitializeCriticalSectionEx|CreateThreadpool|WaitOnAddress' "$RUNNER_TEMP/windows-i386-pe.txt"; then
+              echo 'Windows i386 release imports an API newer than Windows XP' >&2
+              exit 1
+            fi
+          fi
 
       - name: Package artifact
         run: |

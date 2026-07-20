@@ -118,6 +118,12 @@ endif
 # Windows uses MinGW.
 CC_WINDOWS_AMD64 ?= x86_64-w64-mingw32-gcc
 CC_WINDOWS_I386  ?= i686-w64-mingw32-gcc
+# Keep the 32-bit executable loadable by the Windows XP loader and prevent the
+# SDK headers from exposing APIs newer than XP.  The code uses native Win32
+# threads on Windows, so this target does not acquire a libwinpthread runtime
+# dependency with a newer OS baseline.
+WINDOWS_I386_XP_CFLAGS := -D_WIN32_WINNT=0x0501 -DWINVER=0x0501 -DNTDDI_VERSION=0x05010000
+WINDOWS_I386_XP_LDFLAGS := -Wl,--major-subsystem-version,5,--minor-subsystem-version,1
 
 NATIVE_BIN := $(DIST)/fossbench-$(OSNAME)-$(HOST_ARCHNAME)
 
@@ -185,7 +191,7 @@ $(DIST)/fossbench-windows-amd64.exe: $(DRIVER) $(DRIVER_DEPS) $(ASM_AMD64) | $(D
 	@echo "built $@"
 
 $(DIST)/fossbench-windows-i386.exe: $(DRIVER) $(DRIVER_DEPS) $(ASM_I386) | $(DIST)
-	$(CC_WINDOWS_I386) -march=pentium4 $(CFLAGS) $(PTHREAD) -static -o $@ $(DRIVER) $(ASM_I386) -lm -lwinhttp -ladvapi32
+	$(CC_WINDOWS_I386) -march=pentium4 $(WINDOWS_I386_XP_CFLAGS) $(CFLAGS) -static $(WINDOWS_I386_XP_LDFLAGS) -o $@ $(DRIVER) $(ASM_I386) -lm -lwinhttp -ladvapi32
 	@echo "built $@"
 
 # Add a native rule if one was not already made above.
