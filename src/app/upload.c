@@ -120,13 +120,13 @@ done:
 }
 #endif
 
-static int upload_results(const struct system_info *info, double score,
-			  double singlecore_score, const struct result *multi,
+static int upload_results(const struct system_info *info,
+			  const struct result *multi,
 			  const struct result *single, uint64_t duration_ms,
 			  const struct background_metrics *background)
 {
 	char host[256], port[16], path[512], payload[16384];
-	char auth_header[600], response_body[2048], claim_url[1024];
+	char auth_header[600], response_body[2048], claim_url[1024], result_url[1024];
 	char cpu[512], model[512], os[512], compiler[256], kernel[256];
 	const char *base = FB_API_BASE_URL, *p, *slash, *colon;
 	int status = 0, payload_len;
@@ -168,16 +168,14 @@ static int upload_results(const struct system_info *info, double score,
 	payload_len = snprintf(payload, sizeof(payload),
 		"{\"cpu\":\"%s\",\"model\":\"%s\",\"cpu_cores\":%ld,\"cpu_threads\":%ld,"
 		"\"memory_mb\":%ld,\"operating_system\":\"%s\",\"compiler\":\"%s\","
-		"\"fossmark_version\":\"%s\",\"score\":%.17g,\"duration_ms\":%llu,"
-		"\"score_details\":{\"scoring_method\":\"weighted_geometric_mean\","
-		"\"target_score\":%.17g,\"multicore_score\":%.17g,\"singlecore_score\":%.17g,"
+		"\"fossmark_version\":\"%s\",\"workload_suite\":\"fossbench-cpu-v1\","
+		"\"duration_ms\":%llu,\"score_details\":{"
 		"\"minimum_test_seconds\":%.17g,\"repeats\":%d,"
 		"\"system_environment\":{\"kernel\":\"%s\",\"sample_seconds\":%d,"
 		"\"background_cpu_average_percent\":%.17g,\"background_cpu_peak_percent\":%.17g,"
 		"\"available_memory_mb\":%ld,\"process_count\":%ld},\"tests\":[",
 		cpu, model, info->cpu_cores, info->cpu_threads, info->memory_mb, os, compiler,
-		FB_VERSION, score, (unsigned long long)duration_ms, FB_TARGET_SCORE, score,
-		singlecore_score, MIN_SECONDS, REPEATS, kernel, background->samples,
+		FB_VERSION, (unsigned long long)duration_ms, MIN_SECONDS, REPEATS, kernel, background->samples,
 		background->average_cpu_percent, background->peak_cpu_percent,
 		background->available_memory_mb, background->process_count);
 	if (payload_len < 0 || (size_t)payload_len >= sizeof(payload)) return 0;
@@ -185,21 +183,24 @@ static int upload_results(const struct system_info *info, double score,
 		size_t used = (size_t)payload_len;
 		size_t i;
 		for (i = 0; i < NTESTS; i++) {
+			static const char *ids[] = {
+				"native_integer", "wide_integer", "floating_point", "primes",
+				"extended_instructions", "compression", "encryption", "physics",
+				"sorting", "memory_latency", "memory_bandwidth"
+			};
 			int n = snprintf(payload + used, sizeof(payload) - used,
-				"%s{\"name\":\"%s\",\"detail\":\"%s\",\"unit\":\"%s\","
+				"%s{\"id\":\"%s\",\"name\":\"%s\",\"detail\":\"%s\",\"unit\":\"%s\","
 				"\"start_iterations\":%llu,\"work_per_iteration\":%.17g,"
-				"\"reference_rate\":%.17g,\"weight\":%.17g,"
-				"\"multicore\":{\"display_metric\":%.17g,\"rate\":%.17g,\"score\":%.17g,"
+				"\"multicore\":{\"display_metric\":%.17g,\"rate\":%.17g,"
 				"\"seconds\":%.17g,\"iterations\":%llu,\"threads\":%d,\"checksum\":\"%llu\"},"
-				"\"singlecore\":{\"display_metric\":%.17g,\"rate\":%.17g,\"score\":%.17g,"
+				"\"singlecore\":{\"display_metric\":%.17g,\"rate\":%.17g,"
 				"\"seconds\":%.17g,\"iterations\":%llu,\"threads\":%d,\"checksum\":\"%llu\"}}",
-				i ? "," : "", tests[i].name, tests[i].detail, tests[i].unit,
+				i ? "," : "", ids[i], tests[i].name, tests[i].detail, tests[i].unit,
 				(unsigned long long)tests[i].start_n, tests[i].work_per_n,
-				tests[i].ref_rate, tests[i].weight,
-				display_metric(&tests[i], &multi[i]), multi[i].rate, multi[i].score,
+				display_metric(&tests[i], &multi[i]), multi[i].rate,
 				multi[i].seconds, (unsigned long long)multi[i].iters, multi[i].threads,
 				(unsigned long long)multi[i].checksum,
-				display_metric(&tests[i], &single[i]), single[i].rate, single[i].score,
+				display_metric(&tests[i], &single[i]), single[i].rate,
 				single[i].seconds, (unsigned long long)single[i].iters, single[i].threads,
 				(unsigned long long)single[i].checksum);
 			if (n < 0 || (size_t)n >= sizeof(payload) - used) return 0;
@@ -268,16 +269,17 @@ static int upload_results(const struct system_info *info, double score,
 		return 0;
 	}
 	if (status < 200 || status >= 300) { fprintf(stderr, "  upload failed: server returned HTTP %d\n", status); return 0; }
-	if (!json_string_field(response_body, "claim_url", claim_url, sizeof(claim_url))) {
-		fprintf(stderr, "  upload failed: server did not return a claim link\n");
+	if (!json_string_field(response_body, "result_url", result_url, sizeof(result_url))) {
+		fprintf(stderr, "  upload failed: server did not return a result link\n");
 		return 0;
 	}
 	printf("  Results uploaded (HTTP %d).\n", status);
-	{
+	printf("  View your result: %s\n", result_url);
+	if (json_string_field(response_body, "claim_url", claim_url, sizeof(claim_url))) {
 		const char *claim_code = strrchr(claim_url, '/');
 		printf("  Claim code: %s\n", claim_code && claim_code[1] ? claim_code + 1 : claim_url);
+		printf("  Claim your result: %s\n", claim_url);
 	}
-	printf("  Claim your result: %s\n", claim_url);
 	return 1;
 
 #if !defined(_WIN32)

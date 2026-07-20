@@ -4,7 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include <math.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <ctype.h>
@@ -30,7 +29,7 @@
 #ifndef FB_API_BASE_URL
 #  define FB_API_BASE_URL "http://fossbench.net"
 #endif
-#define FB_VERSION "0.2.2"
+#define FB_VERSION "0.3.0"
 
 #if defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64)
 #  define D_INT  "64-bit ALU: madd, umulh, udiv, bitops"
@@ -135,36 +134,6 @@ extern uint64_t fb_chase(void **ptrs, uint64_t steps);
 #ifndef REPEATS
 #  define REPEATS	3			/* Number of tries. */
 #endif
-
-/* Numbers used to calculate scores. */
-
-#define FB_TARGET_SCORE		10000.0		/* reference-machine overall. */
-
-/* Rates from the reference machine. */
-#define FB_REF_INT		3086.0		/* Reference rate. */
-#define FB_REF_INT32		3086.0		/* Common 32-bit integer reference. */
-#define FB_REF_FP		1682.0		/* Reference rate. */
-#define FB_REF_PRIMES		812.0		/* Reference rate. */
-#define FB_REF_SIMD		6576.0		/* Reference rate. */
-#define FB_REF_COMPRESS		674.0		/* Reference rate. */
-#define FB_REF_CRYPTO		406.0		/* Reference rate. */
-#define FB_REF_PHYSICS		631.0		/* Reference rate. */
-#define FB_REF_SORT		363.0		/* Reference rate. */
-#define FB_REF_CHASE		79.0		/* Memory test reference. */
-#define FB_REF_STREAM		3200.0		/* STREAM triad reference rate. */
-
-/* How much each test counts. */
-#define FB_WEIGHT_INT		3.0		/* Wide integer mix. */
-#define FB_WEIGHT_INT32		10.0		/* Common native-width integer work. */
-#define FB_WEIGHT_CHASE		10.0		/* Random-access latency. */
-#define FB_WEIGHT_STREAM	15.0		/* Sustained memory bandwidth. */
-#define FB_WEIGHT_COMPRESS	12.0		/* Score weight. */
-#define FB_WEIGHT_SORT		8.0		/* Score weight. */
-#define FB_WEIGHT_SIMD		16.0		/* Vector and packed arithmetic. */
-#define FB_WEIGHT_FP		10.0		/* Score weight. */
-#define FB_WEIGHT_CRYPTO	8.0		/* Score weight. */
-#define FB_WEIGHT_PRIMES	5.0		/* Score weight. */
-#define FB_WEIGHT_PHYSICS	3.0		/* Divide/square-root-heavy. */
 
 /* Simple repeatable random numbers. */
 
@@ -464,10 +433,8 @@ struct test {
 	const char *detail;
 	run_fn      run;
 	uint64_t    start_n;
-	double      work_per_n;	/* Amount of work used for scoring. */
+	double      work_per_n;	/* Amount of work used to calculate the raw rate. */
 	const char *unit;
-	double      ref_rate;	/* Rate used as the score reference. */
-	double      weight;	/* How much this test counts. */
 };
 
 static uint64_t run_int(uint64_t n, struct workspace *ws)
@@ -566,45 +533,33 @@ static uint64_t run_stream(uint64_t n, struct workspace *ws)
 
 static const struct test tests[] = {
 	{ "Native Integer Math",  "common 32-bit multiply/add/rotate mix",
-	  run_int32,    20, 100000.0 * 16,  "Mops/s",
-	  FB_REF_INT32,    FB_WEIGHT_INT32 },
+	  run_int32,    20, 100000.0 * 16,  "Mops/s" },
 	{ "Wide Integer Math",    D_INT,
-	  run_int,      20, 100000.0 * 24,  "Mops/s",
-	  FB_REF_INT,      FB_WEIGHT_INT },
+	  run_int,      20, 100000.0 * 24,  "Mops/s" },
 	{ "Floating Point Math",  D_FP,
-	  run_fp,       20, 100000.0 * 20,  "Mops/s",
-	  FB_REF_FP,       FB_WEIGHT_FP },
+	  run_fp,       20, 100000.0 * 20,  "Mops/s" },
 	{ "Prime Numbers",        "sieve of Eratosthenes to 2M",
-	  run_primes,    1, (double)PRIME_LIMIT, "Mcand/s",
-	  FB_REF_PRIMES,   FB_WEIGHT_PRIMES },
+	  run_primes,    1, (double)PRIME_LIMIT, "Mcand/s" },
 	{ "Extended Instructions",D_SIMD,
-	  run_simd,     10, 100000.0 * 32,  "Mops/s",
-	  FB_REF_SIMD,     FB_WEIGHT_SIMD },
+	  run_simd,     10, 100000.0 * 32,  "Mops/s" },
 	{ "Compression",          "LZ77 match finder, 4 MiB corpus",
-	  run_compress,  1, (double)COMPRESS_LEN, "MB/s",
-	  FB_REF_COMPRESS, FB_WEIGHT_COMPRESS },
+	  run_compress,  1, (double)COMPRESS_LEN, "MB/s" },
 	{ "Encryption",           "ChaCha20, 20 rounds, 1 MiB",
-	  run_crypto,    4, (double)CIPHER_LEN, "MB/s",
-	  FB_REF_CRYPTO,   FB_WEIGHT_CRYPTO },
+	  run_crypto,    4, (double)CIPHER_LEN, "MB/s" },
 	{ "Physics",              "512-body direct-sum gravity",
-	  run_physics,   4, (double)NBODY_N * NBODY_N, "Mpair/s",
-	  FB_REF_PHYSICS,  FB_WEIGHT_PHYSICS },
+	  run_physics,   4, (double)NBODY_N * NBODY_N, "Mpair/s" },
 	{ "Sorting",              "heapsort, 1M uint32",
-	  run_sort,      1, (double)SORT_N * 20,  "Mkey-cmp/s",
-	  FB_REF_SORT,     FB_WEIGHT_SORT },
+	  run_sort,      1, (double)SORT_N * 20,  "Mkey-cmp/s" },
 	{ "Memory Latency",       CHASE_DETAIL,
-	  run_chase,     1, 1000000.0,      "ns/access",
-	  FB_REF_CHASE,    FB_WEIGHT_CHASE },
+	  run_chase,     1, 1000000.0,      "ns/access" },
 	{ "Memory Bandwidth",     "STREAM triad, 12 MiB working set per thread",
-	  run_stream,    16, (double)STREAM_N * 12.0, "MB/s",
-	  FB_REF_STREAM,   FB_WEIGHT_STREAM },
+	  run_stream,    16, (double)STREAM_N * 12.0, "MB/s" },
 };
 
 #define NTESTS (sizeof(tests) / sizeof(tests[0]))
 
 struct result {
 	double   rate;		/* Measured speed. */
-	double   score;
 	uint64_t checksum;
 	double   seconds;
 	uint64_t iters;
@@ -712,8 +667,6 @@ static struct result run_test(const struct test *t, int threads)
 	r.threads  = threads;
 	/* Calculate the total speed. */
 	r.rate     = ((double)threads * (double)n * t->work_per_n) / best / 1e6;
-	/* Turn the speed into a score. */
-	r.score    = FB_TARGET_SCORE * (r.rate / t->ref_rate);
 	return r;
 }
 
@@ -745,8 +698,8 @@ static void print_header(const struct system_info *info)
 	printf("  kernel:    %s\n", info->kernel[0] ? info->kernel : "unknown");
 	printf("  compiler:  %s\n", info->compiler);
 	printf("\n");
-	printf("  %-24s %12s  %-11s %8s %9s\n",
-	       "TEST", "RATE", "UNIT", "TIME", "SCORE");
+	printf("  %-24s %12s  %-11s %8s\n",
+	       "TEST", "RATE", "UNIT", "TIME");
 	printf("  --------------------------------------------------------------------------\n");
 	fflush(stdout);
 }
@@ -756,9 +709,7 @@ int fossbench_run(int verbose, int upload_mode, int system_check)
 	struct result multi[NTESTS], single[NTESTS];
 	struct system_info system_info;
 	struct background_metrics background;
-	double multi_log_sum = 0.0, single_log_sum = 0.0;
-	double weight_sum = 0.0;
-	double benchmark_started, multicore_score, singlecore_score;
+	double benchmark_started;
 	uint64_t duration_ms;
 	size_t i;
 
@@ -788,8 +739,6 @@ int fossbench_run(int verbose, int upload_mode, int system_check)
 	print_header(&system_info);
 
 	for (i = 0; i < NTESTS; i++) {
-		double sm, ss;
-
 		printf("  %-24s", tests[i].name);
 		fflush(stdout);
 
@@ -797,35 +746,21 @@ int fossbench_run(int verbose, int upload_mode, int system_check)
 		multi[i]  = run_test(&tests[i], (int)g_ncores);
 		single[i] = run_test(&tests[i], 1);
 
-		printf(" %12.1f  %-11s %7.2fs %9.0f\n",
+		printf(" %12.1f  %-11s %7.2fs\n",
 		       display_metric(&tests[i], &multi[i]), tests[i].unit,
-		       multi[i].seconds, multi[i].score);
+		       multi[i].seconds);
 		if (verbose)
 			printf("  %-24s   %s\n"
-			       "  %-24s   weight=%.0f%%  1-core: %.1f %s / %.0f   %ld-core: %.1f %s / %.0f\n",
-			       "", tests[i].detail, "", tests[i].weight,
+			       "  %-24s   1-core: %.1f %s   %ld-core: %.1f %s\n",
+			       "", tests[i].detail, "",
 			       display_metric(&tests[i], &single[i]), tests[i].unit,
-			       single[i].score, g_ncores,
-			       display_metric(&tests[i], &multi[i]), tests[i].unit,
-			       multi[i].score);
+			       g_ncores, display_metric(&tests[i], &multi[i]), tests[i].unit);
 		fflush(stdout);
-
-		/* Add this test to both total scores. */
-		sm = multi[i].score  > 0.0 ? multi[i].score  : 1e-9;
-		ss = single[i].score > 0.0 ? single[i].score : 1e-9;
-		multi_log_sum  += tests[i].weight * log(sm);
-		single_log_sum += tests[i].weight * log(ss);
-		weight_sum     += tests[i].weight;
 	}
 
 	printf("  --------------------------------------------------------------------------\n");
 
-	/* Add this test to both total scores. */
-	multicore_score = exp(multi_log_sum / weight_sum);
-	singlecore_score = exp(single_log_sum / weight_sum);
 	duration_ms = (uint64_t)((now_seconds() - benchmark_started) * 1000.0);
-	printf("  %-24s %44.0f\n", "MULTICORE SCORE", multicore_score);
-	printf("  %-24s %44.0f\n", "SINGLECORE SCORE", singlecore_score);
 	printf("  %-24s %41.2fs\n", "TOTAL DURATION", (double)duration_ms / 1000.0);
 	printf("\n");
 
@@ -853,8 +788,7 @@ int fossbench_run(int verbose, int upload_mode, int system_check)
 #if defined(FB_NO_UPLOAD)
 			fprintf(stderr, "  Upload support is disabled in this build.\n");
 #else
-			upload_results(&system_info, multicore_score, singlecore_score,
-				       multi, single, duration_ms, &background);
+			upload_results(&system_info, multi, single, duration_ms, &background);
 #endif
 		}
 	}
