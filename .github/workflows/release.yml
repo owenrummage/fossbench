@@ -175,5 +175,5 @@ jobs:
             release/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --title "Release $RELEASE_TAG" \
-            --notes "Fixed x86/Linux builds on systems without OpenSSL development headers. Result uploads now use plain HTTP on every platform, removing the OpenSSL build and runtime dependency." \
+            --notes "Hotfix: CPU telemetry (temperature and clock speed) recorded during benchmark runs was not working on Windows or macOS, showing empty temperature data points and a constant clock speed. Windows temperature now reads the ACPI thermal zone over WMI, and clock speed reads live per-core frequency via CallNtPowerInformation instead of a static registry value. macOS temperature now reads the SMC directly across Intel and Apple Silicon (M1-M5) Macs. macOS clock speed now reports as unavailable rather than the fixed nominal frequency it previously showed, since no live-frequency API exists on macOS." \
             --generate-notes
