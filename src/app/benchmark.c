@@ -220,6 +220,219 @@ struct background_metrics {
 	int samples, available;
 };
 
+#define MAX_TELEMETRY_SAMPLES 1800
+
+struct telemetry_sample {
+	uint64_t elapsed_ms;
+	double temperature_c, clock_mhz;
+};
+
+struct telemetry_monitor {
+	struct telemetry_sample samples[MAX_TELEMETRY_SAMPLES];
+	size_t count;
+	double started;
+	volatile int stop;
+#if defined(_WIN32)
+	HANDLE thread;
+#else
+	pthread_t thread;
+#endif
+};
+
+static int read_number_file(const char *path, double *value)
+{
+	FILE *f = fopen(path, "r");
+	int ok;
+	if (!f) return 0;
+	ok = fscanf(f, "%lf", value) == 1;
+	fclose(f);
+	return ok;
+}
+
+#if defined(__linux__)
+static int read_text_file(const char *path, char *value, size_t cap)
+{
+	FILE *f = fopen(path, "r");
+	if (!f || !fgets(value, (int)cap, f)) { if (f) fclose(f); return 0; }
+	fclose(f);
+	value[strcspn(value, "\r\n")] = '\0';
+	return 1;
+}
+
+static int cpu_sensor_name(const char *name)
+{
+	return strstr(name, "cpu") || strstr(name, "CPU") || strstr(name, "package") ||
+	       strstr(name, "Package") || strstr(name, "coretemp") || strstr(name, "k10temp") ||
+	       strstr(name, "zenpower") || strstr(name, "x86_pkg_temp") || strstr(name, "soc_thermal");
+}
+#endif
+
+static double sample_cpu_temperature(void)
+{
+#if defined(__linux__)
+	DIR *dir = opendir("/sys/class/thermal");
+	struct dirent *entry;
+	double hottest = -1.0;
+	if (!dir) return -1.0;
+	while ((entry = readdir(dir)) != NULL) {
+		char path[512], type[128];
+		double value;
+		if (strncmp(entry->d_name, "thermal_zone", 12) != 0) continue;
+		snprintf(path, sizeof(path), "/sys/class/thermal/%s/type", entry->d_name);
+		if (!read_text_file(path, type, sizeof(type)) || !cpu_sensor_name(type)) continue;
+		snprintf(path, sizeof(path), "/sys/class/thermal/%s/temp", entry->d_name);
+		if (read_number_file(path, &value)) {
+			if (value > 1000.0) value /= 1000.0;
+			if (value >= 0.0 && value <= 150.0 && value > hottest) hottest = value;
+		}
+	}
+	closedir(dir);
+	if (hottest < 0.0) {
+		dir = opendir("/sys/class/hwmon");
+		if (!dir) return -1.0;
+		while ((entry = readdir(dir)) != NULL) {
+			char base[512], path[512], name[128];
+			DIR *sensor_dir;
+			struct dirent *sensor;
+			if (strncmp(entry->d_name, "hwmon", 5) != 0) continue;
+			snprintf(base, sizeof(base), "/sys/class/hwmon/%s", entry->d_name);
+			snprintf(path, sizeof(path), "%s/name", base);
+			if (!read_text_file(path, name, sizeof(name)) || !cpu_sensor_name(name)) continue;
+			sensor_dir = opendir(base);
+			if (!sensor_dir) continue;
+			while ((sensor = readdir(sensor_dir)) != NULL) {
+				size_t length = strlen(sensor->d_name);
+				double value;
+				if (strncmp(sensor->d_name, "temp", 4) != 0 || length < 7 || strcmp(sensor->d_name + length - 6, "_input") != 0) continue;
+				snprintf(path, sizeof(path), "%s/%s", base, sensor->d_name);
+				if (read_number_file(path, &value)) {
+					if (value > 1000.0) value /= 1000.0;
+					if (value >= 0.0 && value <= 150.0 && value > hottest) hottest = value;
+				}
+			}
+			closedir(sensor_dir);
+		}
+		closedir(dir);
+	}
+	return hottest;
+#else
+	return -1.0;
+#endif
+}
+
+static double sample_cpu_clock_mhz(void)
+{
+#if defined(__linux__)
+	DIR *dir = opendir("/sys/devices/system/cpu");
+	struct dirent *entry;
+	double total = 0.0;
+	long count = 0;
+	if (dir) {
+		while ((entry = readdir(dir)) != NULL) {
+			char path[512], *end;
+			double value;
+			if (strncmp(entry->d_name, "cpu", 3) != 0 || !isdigit((unsigned char)entry->d_name[3])) continue;
+			strtol(entry->d_name + 3, &end, 10);
+			if (*end) continue;
+			snprintf(path, sizeof(path), "/sys/devices/system/cpu/%s/cpufreq/scaling_cur_freq", entry->d_name);
+			if (read_number_file(path, &value) && value > 0.0) { total += value / 1000.0; count++; }
+		}
+		closedir(dir);
+	}
+	if (count) return total / (double)count;
+	{
+		FILE *f = fopen("/proc/cpuinfo", "r");
+		char line[256];
+		if (!f) return -1.0;
+		while (fgets(line, sizeof(line), f)) {
+			double value;
+			if (sscanf(line, "cpu MHz%*[^:]: %lf", &value) == 1 && value > 0.0) { total += value; count++; }
+		}
+		fclose(f);
+	}
+	return count ? total / (double)count : -1.0;
+#elif defined(__APPLE__)
+	{
+		uint64_t hz = 0; size_t size = sizeof(hz);
+		return sysctlbyname("hw.cpufrequency", &hz, &size, NULL, 0) == 0 && hz ? (double)hz / 1000000.0 : -1.0;
+	}
+#elif defined(_WIN32)
+	{
+		HKEY key; DWORD mhz = 0, size = sizeof(mhz), type = 0;
+		if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", 0, KEY_READ, &key) != ERROR_SUCCESS) return -1.0;
+		if (RegQueryValueExA(key, "~MHz", NULL, &type, (LPBYTE)&mhz, &size) != ERROR_SUCCESS || type != REG_DWORD) mhz = 0;
+		RegCloseKey(key);
+		return mhz ? (double)mhz : -1.0;
+	}
+#else
+	return -1.0;
+#endif
+}
+
+static void record_telemetry_sample(struct telemetry_monitor *monitor)
+{
+	struct telemetry_sample *sample;
+	if (monitor->count >= MAX_TELEMETRY_SAMPLES) return;
+	sample = &monitor->samples[monitor->count++];
+	sample->elapsed_ms = (uint64_t)((now_seconds() - monitor->started) * 1000.0);
+	sample->temperature_c = sample_cpu_temperature();
+	sample->clock_mhz = sample_cpu_clock_mhz();
+}
+
+static void telemetry_sleep(void)
+{
+#if defined(_WIN32)
+	Sleep(100);
+#else
+	usleep(100000);
+#endif
+}
+
+#if defined(_WIN32)
+static DWORD WINAPI telemetry_entry(LPVOID arg)
+#else
+static void *telemetry_entry(void *arg)
+#endif
+{
+	struct telemetry_monitor *monitor = (struct telemetry_monitor *)arg;
+	double next = monitor->started;
+	while (!monitor->stop) {
+		double current = now_seconds();
+		if (current >= next) { record_telemetry_sample(monitor); next += 1.0; }
+		telemetry_sleep();
+	}
+	record_telemetry_sample(monitor);
+#if defined(_WIN32)
+	return 0;
+#else
+	return NULL;
+#endif
+}
+
+static int start_telemetry_monitor(struct telemetry_monitor *monitor, double started)
+{
+	memset(monitor, 0, sizeof(*monitor));
+	monitor->started = started;
+#if defined(_WIN32)
+	monitor->thread = CreateThread(NULL, 0, telemetry_entry, monitor, 0, NULL);
+	return monitor->thread != NULL;
+#else
+	return pthread_create(&monitor->thread, NULL, telemetry_entry, monitor) == 0;
+#endif
+}
+
+static void stop_telemetry_monitor(struct telemetry_monitor *monitor, int started)
+{
+	if (!started) return;
+	monitor->stop = 1;
+#if defined(_WIN32)
+	WaitForSingleObject(monitor->thread, INFINITE);
+	CloseHandle(monitor->thread);
+#else
+	pthread_join(monitor->thread, NULL);
+#endif
+}
+
 struct cpu_snapshot { uint64_t total, idle; };
 
 static int take_cpu_snapshot(struct cpu_snapshot *s)
@@ -789,7 +1002,9 @@ int fossbench_run(int verbose, int upload_mode, int system_check)
 	struct result real_multi[NTESTS], real_single[NTESTS];
 	struct system_info system_info;
 	struct background_metrics background;
+	struct telemetry_monitor telemetry;
 	double benchmark_started;
+	int telemetry_started;
 	uint64_t duration_ms;
 	size_t i;
 
@@ -810,6 +1025,7 @@ int fossbench_run(int verbose, int upload_mode, int system_check)
 		}
 	}
 	benchmark_started = now_seconds();
+	telemetry_started = start_telemetry_monitor(&telemetry, benchmark_started);
 
 	printf("\n  preparing workloads...");
 	fflush(stdout);
@@ -860,6 +1076,7 @@ int fossbench_run(int verbose, int upload_mode, int system_check)
 	}
 
 	printf("  --------------------------------------------------------------------------\n");
+	stop_telemetry_monitor(&telemetry, telemetry_started);
 
 	duration_ms = (uint64_t)((now_seconds() - benchmark_started) * 1000.0);
 	printf("  %-24s %41.2fs\n", "TOTAL DURATION", (double)duration_ms / 1000.0);
@@ -890,7 +1107,8 @@ int fossbench_run(int verbose, int upload_mode, int system_check)
 			fprintf(stderr, "  Upload support is disabled in this build.\n");
 #else
 			upload_results(&system_info, raw_multi, raw_single,
-				       real_multi, real_single, duration_ms, &background);
+				       real_multi, real_single, duration_ms, &background,
+				       &telemetry);
 #endif
 		}
 	}
