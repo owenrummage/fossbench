@@ -167,7 +167,7 @@ extern uint64_t fb_c_chase(void **ptrs, uint64_t steps);
 #endif
 
 #ifndef MIN_SECONDS
-#  define MIN_SECONDS	2.0			/* Minimum run time. */
+#  define MIN_SECONDS	0.4			/* Minimum run time. */
 #endif
 #ifndef REPEATS
 #  define REPEATS	3			/* Number of tries. */
