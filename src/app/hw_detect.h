@@ -10,6 +10,9 @@ struct system_info {
 	long cpu_cores;
 	long cpu_threads;
 	long memory_mb;
+	long l1_cache_kb;
+	long l2_cache_kb;
+	long l3_cache_kb;
 };
 
 const char *hw_arch_name(void);

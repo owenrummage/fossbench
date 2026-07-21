@@ -17,6 +17,9 @@
 #endif
 #if defined(_WIN32)
 #  define WIN32_LEAN_AND_MEAN
+#  ifndef _WIN32_WINNT
+#    define _WIN32_WINNT 0x0601		/* GetLogicalProcessorInformationEx (Win7+). */
+#  endif
 #  include <windows.h>
 #  if defined(__i386__) || defined(__x86_64__)
 #    include <cpuid.h>
@@ -89,6 +92,39 @@ static int apple_m_name(const char *text, char *dst, size_t cap)
 
 /* Linux device trees identify Apple Silicon by its SoC code. */
 #if defined(__linux__)
+static int read_first_property(const char *path, char *dst, size_t cap);
+
+static long cache_size_kb(const char *text)
+{
+	char *end;
+	long value = strtol(text, &end, 10);
+	if (value <= 0) return 0;
+	while (*end && isspace((unsigned char)*end)) end++;
+	if (*end == 'M' || *end == 'm') value *= 1024;
+	return value;
+}
+
+static void linux_detect_caches(struct system_info *info)
+{
+	int index;
+	for (index = 0; index < 32; index++) {
+		char path[160], level_text[32], size_text[32];
+		long level, kb;
+		snprintf(path, sizeof path,
+			 "/sys/devices/system/cpu/cpu0/cache/index%d/level", index);
+		if (!read_first_property(path, level_text, sizeof level_text)) continue;
+		snprintf(path, sizeof path,
+			 "/sys/devices/system/cpu/cpu0/cache/index%d/size", index);
+		if (!read_first_property(path, size_text, sizeof size_text)) continue;
+		level = strtol(level_text, NULL, 10);
+		kb = cache_size_kb(size_text);
+		/* L1 instruction and data caches are separate and should be added. */
+		if (level == 1) info->l1_cache_kb += kb;
+		else if (level == 2 && kb > info->l2_cache_kb) info->l2_cache_kb = kb;
+		else if (level == 3 && kb > info->l3_cache_kb) info->l3_cache_kb = kb;
+	}
+}
+
 static int apple_m_name_from_soc(const char *text, char *dst, size_t cap)
 {
 	static const struct { const char *soc, *name; } chips[] = {
@@ -251,6 +287,83 @@ static int read_first_property(const char *path, char *dst, size_t cap)
 }
 #endif
 
+#if defined(_WIN32)
+/* Count physical cores. Windows only exposes logical processors through
+ * GetSystemInfo, so with SMT/HyperThreading every count was wrong (an 8-core /
+ * 16-thread part reported 16 cores). Each RelationProcessorCore record returned
+ * by GetLogicalProcessorInformationEx describes exactly one physical core. */
+static long win_physical_cores(void)
+{
+	DWORD length = 0;
+	BYTE *buffer, *p;
+	long cores = 0;
+
+	if (GetLogicalProcessorInformationEx(RelationProcessorCore, NULL, &length))
+		return 0;
+	if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || length == 0)
+		return 0;
+	buffer = malloc(length);
+	if (buffer == NULL)
+		return 0;
+	if (GetLogicalProcessorInformationEx(RelationProcessorCore,
+			(PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)buffer, &length)) {
+		for (p = buffer; p < buffer + length; ) {
+			PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX record =
+				(PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)p;
+			if (record->Size == 0)
+				break;			/* Guard against a malformed run. */
+			if (record->Relationship == RelationProcessorCore)
+				cores++;
+			p += record->Size;
+		}
+	}
+	free(buffer);
+	return cores;
+}
+#endif
+
+#if defined(__linux__)
+/* Count physical cores from sysfs topology. PowerPC (and some ARM) kernels omit
+ * the "physical id" / "core id" fields from /proc/cpuinfo, so those hosts fell
+ * back to the thread count (a POWER8 with SMT8 reported 176 cores instead of
+ * 22). Every thread of a physical core shares one thread-sibling group, and the
+ * lowest thread id in that group uniquely identifies the core -- counting the
+ * distinct groups is correct with SMT, without it, and across clusters whose
+ * core_id numbering restarts (e.g. Apple Silicon under Asahi). */
+static long linux_topology_cores(long max_threads)
+{
+	long seen[4096];
+	int nseen = 0;
+	long cpu, cores = 0;
+
+	for (cpu = 0; cpu < max_threads && cpu < 4096; cpu++) {
+		char path[192], value[256];
+		long first;
+		int i, duplicate = 0;
+
+		snprintf(path, sizeof path,
+			 "/sys/devices/system/cpu/cpu%ld/topology/thread_siblings_list", cpu);
+		if (!read_first_property(path, value, sizeof value)) {
+			snprintf(path, sizeof path,
+				 "/sys/devices/system/cpu/cpu%ld/topology/core_cpus_list", cpu);
+			if (!read_first_property(path, value, sizeof value))
+				continue;
+		}
+		first = strtol(value, NULL, 0);	/* Lowest thread id of this core. */
+		for (i = 0; i < nseen; i++)
+			if (seen[i] == first) {
+				duplicate = 1;
+				break;
+			}
+		if (!duplicate && nseen < 4096) {
+			seen[nseen++] = first;
+			cores++;
+		}
+	}
+	return cores;
+}
+#endif
+
 void hw_detect_system(struct system_info *info)
 {
 	long detected_threads;
@@ -363,6 +476,13 @@ void hw_detect_system(struct system_info *info)
 			if (npairs > 0) info->cpu_cores = npairs;
 		}
 	}
+	/* When /proc/cpuinfo did not distinguish cores from threads (PowerPC, ARM),
+	 * recover the physical core count from sysfs topology. */
+	if (info->cpu_cores == info->cpu_threads) {
+		long cores = linux_topology_cores(info->cpu_threads);
+		if (cores > 0)
+			info->cpu_cores = cores;
+	}
 	if (apple_soc[0])
 		snprintf(info->cpu, sizeof info->cpu, "%s", apple_soc);
 #if defined(__aarch64__) || defined(__arm__)
@@ -418,6 +538,7 @@ void hw_detect_system(struct system_info *info)
 			fclose(f);
 		}
 	}
+	linux_detect_caches(info);
 	{
 		FILE *f = fopen("/etc/os-release", "r"); char line[512];
 		if (f) { while (fgets(line, sizeof(line), f)) if (!strncmp(line, "PRETTY_NAME=", 12)) {
@@ -453,6 +574,20 @@ void hw_detect_system(struct system_info *info)
 		sysctlbyname("hw.model", info->model, &model_n, NULL, 0);
 		if (sysctlbyname("hw.physicalcpu", &cores, &cn, NULL, 0) == 0) info->cpu_cores = cores;
 		if (sysctlbyname("hw.memsize", &mem, &mn, NULL, 0) == 0) info->memory_mb = (long)(mem / 1024 / 1024);
+		{
+			uint64_t bytes = 0; size_t bytes_n = sizeof bytes;
+			if (sysctlbyname("hw.l1dcachesize", &bytes, &bytes_n, NULL, 0) == 0)
+				info->l1_cache_kb += (long)(bytes / 1024);
+			bytes = 0; bytes_n = sizeof bytes;
+			if (sysctlbyname("hw.l1icachesize", &bytes, &bytes_n, NULL, 0) == 0)
+				info->l1_cache_kb += (long)(bytes / 1024);
+			bytes = 0; bytes_n = sizeof bytes;
+			if (sysctlbyname("hw.l2cachesize", &bytes, &bytes_n, NULL, 0) == 0)
+				info->l2_cache_kb = (long)(bytes / 1024);
+			bytes = 0; bytes_n = sizeof bytes;
+			if (sysctlbyname("hw.l3cachesize", &bytes, &bytes_n, NULL, 0) == 0)
+				info->l3_cache_kb = (long)(bytes / 1024);
+		}
 	}
 	{
 		char product[64] = ""; size_t pn = sizeof(product);
@@ -463,6 +598,30 @@ void hw_detect_system(struct system_info *info)
 			snprintf(info->kernel, sizeof(info->kernel), "%.62s %.64s", u.sysname, u.release);
 	}
 #elif defined(_WIN32)
+	{
+		DWORD bytes = 0;
+		PSYSTEM_LOGICAL_PROCESSOR_INFORMATION entries = NULL;
+		if (!GetLogicalProcessorInformation(NULL, &bytes) &&
+		    GetLastError() == ERROR_INSUFFICIENT_BUFFER) {
+			entries = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION)malloc(bytes);
+			if (entries && GetLogicalProcessorInformation(entries, &bytes)) {
+				DWORD i, count = bytes / sizeof *entries;
+				long cores = 0;
+				for (i = 0; i < count; i++) {
+					if (entries[i].Relationship == RelationProcessorCore) cores++;
+					else if (entries[i].Relationship == RelationCache) {
+						CACHE_DESCRIPTOR c = entries[i].Cache;
+						long kb = (long)(c.Size / 1024);
+						if (c.Level == 1 && kb > info->l1_cache_kb) info->l1_cache_kb = kb;
+						else if (c.Level == 2 && kb > info->l2_cache_kb) info->l2_cache_kb = kb;
+						else if (c.Level == 3 && kb > info->l3_cache_kb) info->l3_cache_kb = kb;
+					}
+				}
+				if (cores > 0) info->cpu_cores = cores;
+			}
+			free(entries);
+		}
+	}
 	{
 		HKEY key;
 		char brand[sizeof info->cpu] = "";
@@ -475,6 +634,24 @@ void hw_detect_system(struct system_info *info)
 			    (type == REG_SZ || type == REG_EXPAND_SZ)) {
 				brand[sizeof brand - 1] = '\0'; trim(brand);
 				if (brand[0]) snprintf(info->cpu, sizeof info->cpu, "%s", brand);
+			}
+			RegCloseKey(key);
+		}
+	}
+	{
+		long cores = win_physical_cores();
+		if (cores > 0)
+			info->cpu_cores = cores;
+	}
+	{
+		HKEY key; char product[sizeof info->model] = "";
+		DWORD type = 0, bytes = sizeof product;
+		if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+		    "HARDWARE\\DESCRIPTION\\System\\BIOS", 0, KEY_QUERY_VALUE, &key) == ERROR_SUCCESS) {
+			if (RegQueryValueExA(key, "SystemProductName", NULL, &type,
+			    (BYTE *)product, &bytes) == ERROR_SUCCESS && type == REG_SZ) {
+				product[sizeof product - 1] = '\0'; trim(product);
+				if (product[0]) snprintf(info->model, sizeof info->model, "%s", product);
 			}
 			RegCloseKey(key);
 		}
@@ -525,4 +702,33 @@ void hw_detect_system(struct system_info *info)
 	}
 #endif
 #endif
+	/* Portable POSIX fallbacks cover BSDs and other Unix systems where the
+	 * platform-specific branches above are unavailable. */
+#if !defined(_WIN32) && !defined(__linux__) && !defined(__APPLE__)
+	{
+		long pages = sysconf(_SC_PHYS_PAGES), page_size = sysconf(_SC_PAGESIZE);
+		if (pages > 0 && page_size > 0) info->memory_mb = (pages / 1024) * (page_size / 1024);
+	}
+# if defined(_SC_LEVEL1_DCACHE_SIZE)
+	{ long v = sysconf(_SC_LEVEL1_DCACHE_SIZE); if (v > 0) info->l1_cache_kb += v / 1024; }
+# endif
+# if defined(_SC_LEVEL1_ICACHE_SIZE)
+	{ long v = sysconf(_SC_LEVEL1_ICACHE_SIZE); if (v > 0) info->l1_cache_kb += v / 1024; }
+# endif
+# if defined(_SC_LEVEL2_CACHE_SIZE)
+	{ long v = sysconf(_SC_LEVEL2_CACHE_SIZE); if (v > 0) info->l2_cache_kb = v / 1024; }
+# endif
+# if defined(_SC_LEVEL3_CACHE_SIZE)
+	{ long v = sysconf(_SC_LEVEL3_CACHE_SIZE); if (v > 0) info->l3_cache_kb = v / 1024; }
+# endif
+#endif
+	/* Never emit empty identity fields: these values are used by the website
+	 * for processor matching and display on platforms with sparse APIs. */
+	if (!info->cpu[0]) snprintf(info->cpu, sizeof info->cpu, "%s", HW_ARCH);
+	if (!info->model[0]) snprintf(info->model, sizeof info->model, "%s", info->cpu);
+	if (!info->kernel[0]) snprintf(info->kernel, sizeof info->kernel, "%s", info->operating_system);
+	if (info->memory_mb < 1) info->memory_mb = 1;
+	if (info->l1_cache_kb < 1) info->l1_cache_kb = 1;
+	if (info->l2_cache_kb < 1) info->l2_cache_kb = info->l1_cache_kb;
+	if (info->l3_cache_kb < 1) info->l3_cache_kb = info->l2_cache_kb;
 }

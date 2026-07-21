@@ -2,17 +2,17 @@
 # Use make for the current computer, or a named target for another one.
 
 CC      ?= cc
-CFLAGS  ?= -O2 -Wall -Wextra
+CFLAGS  ?= -O3 -flto -funroll-loops -Wall -Wextra
 LDLIBS  ?= -lm
 # Needed for the worker threads.
 PTHREAD := -pthread
 
 DIST      := dist
-DRIVER    := src/main.c src/app/benchmark.c src/app/hw_detect.c
+DRIVER    := src/main.c src/app/benchmark.c src/app/hw_detect.c src/kernels/fossbench-portable.c
 DRIVER_DEPS := src/app/benchmark.h src/app/hw_detect.h src/app/upload.c
 ASM_ARM64 := src/kernels/fossbench-arm64.S
 ASM_AMD64 := src/kernels/fossbench-amd64.S
-ASM_I386  := src/kernels/fossbench-i386.S
+SRC_I386  := src/kernels/fossbench-i386.c
 ASM_PPC32 := src/kernels/fossbench-ppc32be.S
 SRC_PPC32 := src/kernels/fossbench-ppc32be-chacha.c
 ASM_PPC64 := src/kernels/fossbench-ppc64be.S
@@ -29,7 +29,7 @@ else ifneq (,$(filter x86_64 amd64,$(HOST_ARCH)))
 	HOST_KERNEL   := $(ASM_AMD64)
 else ifneq (,$(filter i386 i486 i586 i686 x86,$(HOST_ARCH)))
 	HOST_ARCHNAME := i386
-	HOST_KERNEL   := $(ASM_I386)
+	HOST_KERNEL   := $(SRC_I386)
 else ifneq (,$(filter ppc64le powerpc64le,$(HOST_ARCH)))
 	HOST_ARCHNAME := ppc64le
 	HOST_KERNEL   := $(ASM_PPC64LE)
@@ -47,8 +47,8 @@ else
 $(error unsupported host architecture '$(HOST_ARCH)')
 endif
 ifeq ($(HOST_ARCHNAME),i386)
-	# Keep the old i386 target simple and non-PIE.
-	CFLAGS  += -march=pentium4 -fno-pie
+	# Keep the i386 target compatible with the original 80386 ISA.
+	CFLAGS  += -march=i386 -fno-pie
 	LDFLAGS += -no-pie
 endif
 ifeq ($(HOST_ARCHNAME),ppc64be)
@@ -157,8 +157,8 @@ $(DIST)/fossbench-linux-amd64: $(DRIVER) $(DRIVER_DEPS) $(ASM_AMD64) | $(DIST)
 	$(CC_AMD64) $(CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_AMD64) $(LDLIBS)
 	@echo "built $@"
 
-$(DIST)/fossbench-linux-i386: $(DRIVER) $(DRIVER_DEPS) $(ASM_I386) | $(DIST)
-	$(CC_I386) -m32 -march=pentium4 -fno-pie -no-pie $(CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_I386) $(LDLIBS)
+$(DIST)/fossbench-linux-i386: $(DRIVER) $(DRIVER_DEPS) $(SRC_I386) | $(DIST)
+	$(CC_I386) -m32 -march=i386 -fno-pie -no-pie $(CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(SRC_I386) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossbench-linux-ppc32be: $(DRIVER) $(DRIVER_DEPS) $(ASM_PPC32) $(SRC_PPC32) | $(DIST)
@@ -190,8 +190,8 @@ $(DIST)/fossbench-windows-amd64.exe: $(DRIVER) $(DRIVER_DEPS) $(ASM_AMD64) | $(D
 	$(CC_WINDOWS_AMD64) $(CFLAGS) $(PTHREAD) -static -o $@ $(DRIVER) $(ASM_AMD64) -lm -lwinhttp -ladvapi32
 	@echo "built $@"
 
-$(DIST)/fossbench-windows-i386.exe: $(DRIVER) $(DRIVER_DEPS) $(ASM_I386) | $(DIST)
-	$(CC_WINDOWS_I386) -march=pentium4 $(WINDOWS_I386_XP_CFLAGS) $(CFLAGS) -static $(WINDOWS_I386_XP_LDFLAGS) -o $@ $(DRIVER) $(ASM_I386) -lm -lwinhttp -ladvapi32
+$(DIST)/fossbench-windows-i386.exe: $(DRIVER) $(DRIVER_DEPS) $(SRC_I386) | $(DIST)
+	$(CC_WINDOWS_I386) -march=i386 $(WINDOWS_I386_XP_CFLAGS) $(CFLAGS) -static $(WINDOWS_I386_XP_LDFLAGS) -o $@ $(DRIVER) $(SRC_I386) -lm -lwinhttp -ladvapi32
 	@echo "built $@"
 
 # Add a native rule if one was not already made above.

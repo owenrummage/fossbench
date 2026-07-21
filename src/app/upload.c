@@ -120,18 +120,52 @@ done:
 }
 #endif
 
+static int append_result_tests(char *payload, size_t cap, size_t *used,
+			       const struct result *multi,
+			       const struct result *single)
+{
+	static const char *ids[] = {
+		"native_integer", "wide_integer", "floating_point", "primes",
+		"extended_instructions", "compression", "encryption", "physics",
+		"sorting", "memory_latency", "memory_bandwidth"
+	};
+	size_t i;
+	for (i = 0; i < NTESTS; i++) {
+		int n = snprintf(payload + *used, cap - *used,
+			"%s{\"id\":\"%s\",\"name\":\"%s\",\"detail\":\"%s\",\"unit\":\"%s\","
+			"\"start_iterations\":%llu,\"work_per_iteration\":%.17g,"
+			"\"multicore\":{\"display_metric\":%.17g,\"rate\":%.17g,"
+			"\"seconds\":%.17g,\"iterations\":%llu,\"threads\":%d,\"checksum\":\"%llu\"},"
+			"\"singlecore\":{\"display_metric\":%.17g,\"rate\":%.17g,"
+			"\"seconds\":%.17g,\"iterations\":%llu,\"threads\":%d,\"checksum\":\"%llu\"}}",
+			i ? "," : "", ids[i], tests[i].name, tests[i].detail, tests[i].unit,
+			(unsigned long long)tests[i].start_n, tests[i].work_per_n,
+			display_metric(&tests[i], &multi[i]), multi[i].rate, multi[i].seconds,
+			(unsigned long long)multi[i].iters, multi[i].threads,
+			(unsigned long long)multi[i].checksum,
+			display_metric(&tests[i], &single[i]), single[i].rate, single[i].seconds,
+			(unsigned long long)single[i].iters, single[i].threads,
+			(unsigned long long)single[i].checksum);
+		if (n < 0 || (size_t)n >= cap - *used) return 0;
+		*used += (size_t)n;
+	}
+	return 1;
+}
+
 static int upload_results(const struct system_info *info,
-			  const struct result *multi,
-			  const struct result *single, uint64_t duration_ms,
+			  const struct result *raw_multi,
+			  const struct result *raw_single,
+			  const struct result *real_multi,
+			  const struct result *real_single, uint64_t duration_ms,
 			  const struct background_metrics *background)
 {
-	char host[256], port[16], path[512], payload[16384];
+	char host[256], port[16], path[512], payload[32768];
 	char auth_header[600], response_body[2048], claim_url[1024], result_url[1024];
 	char cpu[512], model[512], os[512], compiler[256], kernel[256];
 	const char *base = FB_API_BASE_URL, *p, *slash, *colon;
 	int status = 0, payload_len;
 #if !defined(_WIN32)
-	char request[20000], response[4096];
+	char request[40000], response[4096];
 	struct addrinfo hints, *addresses = NULL, *a;
 	int fd = -1, request_len;
 #endif
@@ -167,46 +201,30 @@ static int upload_results(const struct system_info *info,
 	/* The server still calls this field fossmark_version. */
 	payload_len = snprintf(payload, sizeof(payload),
 		"{\"cpu\":\"%s\",\"model\":\"%s\",\"cpu_cores\":%ld,\"cpu_threads\":%ld,"
+		"\"architecture\":\"%s\",\"l1_cache_kb\":%ld,\"l2_cache_kb\":%ld,\"l3_cache_kb\":%ld,"
 		"\"memory_mb\":%ld,\"operating_system\":\"%s\",\"compiler\":\"%s\","
-		"\"fossmark_version\":\"%s\",\"workload_suite\":\"fossbench-cpu-v1\","
+		"\"fossmark_version\":\"%s\",\"workload_suite\":\"fossbench-cpu-v2\","
 		"\"duration_ms\":%llu,\"score_details\":{"
 		"\"minimum_test_seconds\":%.17g,\"repeats\":%d,"
 		"\"system_environment\":{\"kernel\":\"%s\",\"sample_seconds\":%d,"
 		"\"background_cpu_average_percent\":%.17g,\"background_cpu_peak_percent\":%.17g,"
-		"\"available_memory_mb\":%ld,\"process_count\":%ld},\"tests\":[",
-		cpu, model, info->cpu_cores, info->cpu_threads, info->memory_mb, os, compiler,
+		"\"available_memory_mb\":%ld,\"process_count\":%ld},\"raw_tests\":[",
+		cpu, model, info->cpu_cores, info->cpu_threads, hw_arch_name(),
+		info->l1_cache_kb, info->l2_cache_kb, info->l3_cache_kb,
+		info->memory_mb, os, compiler,
 		FB_VERSION, (unsigned long long)duration_ms, MIN_SECONDS, REPEATS, kernel, background->samples,
 		background->average_cpu_percent, background->peak_cpu_percent,
 		background->available_memory_mb, background->process_count);
 	if (payload_len < 0 || (size_t)payload_len >= sizeof(payload)) return 0;
 	{
 		size_t used = (size_t)payload_len;
-		size_t i;
-		for (i = 0; i < NTESTS; i++) {
-			static const char *ids[] = {
-				"native_integer", "wide_integer", "floating_point", "primes",
-				"extended_instructions", "compression", "encryption", "physics",
-				"sorting", "memory_latency", "memory_bandwidth"
-			};
-			int n = snprintf(payload + used, sizeof(payload) - used,
-				"%s{\"id\":\"%s\",\"name\":\"%s\",\"detail\":\"%s\",\"unit\":\"%s\","
-				"\"start_iterations\":%llu,\"work_per_iteration\":%.17g,"
-				"\"multicore\":{\"display_metric\":%.17g,\"rate\":%.17g,"
-				"\"seconds\":%.17g,\"iterations\":%llu,\"threads\":%d,\"checksum\":\"%llu\"},"
-				"\"singlecore\":{\"display_metric\":%.17g,\"rate\":%.17g,"
-				"\"seconds\":%.17g,\"iterations\":%llu,\"threads\":%d,\"checksum\":\"%llu\"}}",
-				i ? "," : "", ids[i], tests[i].name, tests[i].detail, tests[i].unit,
-				(unsigned long long)tests[i].start_n, tests[i].work_per_n,
-				display_metric(&tests[i], &multi[i]), multi[i].rate,
-				multi[i].seconds, (unsigned long long)multi[i].iters, multi[i].threads,
-				(unsigned long long)multi[i].checksum,
-				display_metric(&tests[i], &single[i]), single[i].rate,
-				single[i].seconds, (unsigned long long)single[i].iters, single[i].threads,
-				(unsigned long long)single[i].checksum);
-			if (n < 0 || (size_t)n >= sizeof(payload) - used) return 0;
-			used += (size_t)n;
-		}
-		if (used + 3 >= sizeof(payload)) return 0;
+		int n;
+		if (!append_result_tests(payload, sizeof payload, &used, raw_multi, raw_single)) return 0;
+		n = snprintf(payload + used, sizeof payload - used, "],\"real_tests\":[");
+		if (n < 0 || (size_t)n >= sizeof payload - used) return 0;
+		used += (size_t)n;
+		if (!append_result_tests(payload, sizeof payload, &used, real_multi, real_single)) return 0;
+		if (used + 3 >= sizeof payload) return 0;
 		memcpy(payload + used, "]}}", 4);
 		payload_len = (int)(used + 3);
 	}
