@@ -178,21 +178,20 @@ $(DIST)/fossbench-linux-ppc64le: $(DRIVER) $(DRIVER_DEPS) $(ASM_PPC64LE) | $(DIS
 	@echo "built $@"
 
 $(DIST)/fossbench-macos-arm64: $(DRIVER) $(DRIVER_DEPS) $(ASM_ARM64) | $(DIST)
-	$(CC_MACOS_ARM64) -arch arm64 $(CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_ARM64) $(LDLIBS) -framework IOKit -framework CoreFoundation
+	$(CC_MACOS_ARM64) -arch arm64 $(CFLAGS) $(PTHREAD) $(LDFLAGS) -o $@ $(DRIVER) $(ASM_ARM64) $(LDLIBS)
 	@echo "built $@"
 
 $(DIST)/fossbench-macos-amd64: $(DRIVER) $(DRIVER_DEPS) $(ASM_AMD64) | $(DIST)
-	MACOSX_DEPLOYMENT_TARGET=$(MACOS_AMD64_MIN) $(CC_MACOS_AMD64) -arch x86_64 -mmacosx-version-min=$(MACOS_AMD64_MIN) $(CFLAGS) $(PTHREAD) $(LDFLAGS) -Wl,-no_fixup_chains -o $@ $(DRIVER) $(ASM_AMD64) $(LDLIBS) -framework IOKit -framework CoreFoundation
+	MACOSX_DEPLOYMENT_TARGET=$(MACOS_AMD64_MIN) $(CC_MACOS_AMD64) -arch x86_64 -mmacosx-version-min=$(MACOS_AMD64_MIN) $(CFLAGS) $(PTHREAD) $(LDFLAGS) -Wl,-no_fixup_chains -o $@ $(DRIVER) $(ASM_AMD64) $(LDLIBS)
 	@echo "built $@"
 
-# Windows builds are static and use WinHTTP. Temperature/clock telemetry
-# additionally needs WMI (ole32/oleaut32/wbemuuid) and PowrProf.
+# Windows builds are static and use WinHTTP.
 $(DIST)/fossbench-windows-amd64.exe: $(DRIVER) $(DRIVER_DEPS) $(ASM_AMD64) | $(DIST)
-	$(CC_WINDOWS_AMD64) $(CFLAGS) $(PTHREAD) -static -o $@ $(DRIVER) $(ASM_AMD64) -lm -lwinhttp -ladvapi32 -lole32 -loleaut32 -lwbemuuid -lpowrprof
+	$(CC_WINDOWS_AMD64) $(CFLAGS) $(PTHREAD) -static -o $@ $(DRIVER) $(ASM_AMD64) -lm -lwinhttp -ladvapi32
 	@echo "built $@"
 
 $(DIST)/fossbench-windows-i386.exe: $(DRIVER) $(DRIVER_DEPS) $(SRC_I386) | $(DIST)
-	$(CC_WINDOWS_I386) -march=i386 $(WINDOWS_I386_XP_CFLAGS) $(CFLAGS) -static $(WINDOWS_I386_XP_LDFLAGS) -o $@ $(DRIVER) $(SRC_I386) -lm -lwinhttp -ladvapi32 -lole32 -loleaut32 -lwbemuuid -lpowrprof
+	$(CC_WINDOWS_I386) -march=i386 $(WINDOWS_I386_XP_CFLAGS) $(CFLAGS) -static $(WINDOWS_I386_XP_LDFLAGS) -o $@ $(DRIVER) $(SRC_I386) -lm -lwinhttp -ladvapi32
 	@echo "built $@"
 
 # Add a native rule if one was not already made above.

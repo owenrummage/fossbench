@@ -157,8 +157,7 @@ static int upload_results(const struct system_info *info,
 			  const struct result *raw_single,
 			  const struct result *real_multi,
 			  const struct result *real_single, uint64_t duration_ms,
-			  const struct background_metrics *background,
-			  const struct telemetry_monitor *telemetry)
+			  const struct background_metrics *background)
 {
 	char host[256], port[16], path[512], payload[131072];
 	char auth_header[600], response_body[2048], claim_url[1024], result_url[1024];
@@ -225,27 +224,6 @@ static int upload_results(const struct system_info *info,
 		if (n < 0 || (size_t)n >= sizeof payload - used) return 0;
 		used += (size_t)n;
 		if (!append_result_tests(payload, sizeof payload, &used, real_multi, real_single)) return 0;
-		if (used + 3 >= sizeof payload) return 0;
-		n = snprintf(payload + used, sizeof payload - used, "],\"telemetry\":[");
-		if (n < 0 || (size_t)n >= sizeof payload - used) return 0;
-		used += (size_t)n;
-		{
-			size_t i;
-			for (i = 0; i < telemetry->count; i++) {
-				const struct telemetry_sample *sample = &telemetry->samples[i];
-				char temperature[32], clock[32];
-				if (sample->temperature_c < 0.0) strcpy(temperature, "null");
-				else snprintf(temperature, sizeof(temperature), "%.2f", sample->temperature_c);
-				if (sample->clock_mhz < 0.0) strcpy(clock, "null");
-				else snprintf(clock, sizeof(clock), "%.2f", sample->clock_mhz);
-				n = snprintf(payload + used, sizeof payload - used,
-					"%s{\"elapsed_ms\":%llu,\"temperature_c\":%s,\"clock_mhz\":%s}",
-					i ? "," : "", (unsigned long long)sample->elapsed_ms,
-					temperature, clock);
-				if (n < 0 || (size_t)n >= sizeof payload - used) return 0;
-				used += (size_t)n;
-			}
-		}
 		if (used + 4 >= sizeof payload) return 0;
 		memcpy(payload + used, "]}}", 4);
 		payload_len = (int)(used + 3);

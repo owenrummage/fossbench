@@ -12,20 +12,6 @@
 #  include <tlhelp32.h>
 #  include <winhttp.h>
 #  include <process.h>
-#  include <powrprof.h>
-#  include <wbemidl.h>
-#  include <oleauto.h>
-/* Documented by Microsoft but not declared in MinGW's powrprof.h; including
- * <ddk/ntpoapi.h> for it collides with definitions already pulled in by
- * <windows.h>, so declare the same layout locally instead. */
-typedef struct _PROCESSOR_POWER_INFORMATION {
-	ULONG Number;
-	ULONG MaxMhz;
-	ULONG CurrentMhz;
-	ULONG MhzLimit;
-	ULONG MaxIdleState;
-	ULONG CurrentIdleState;
-} PROCESSOR_POWER_INFORMATION, *PPROCESSOR_POWER_INFORMATION;
 #else
 #  include <pthread.h>
 #  include <unistd.h>
@@ -46,14 +32,13 @@ typedef struct _PROCESSOR_POWER_INFORMATION {
 #  include <sys/sysctl.h>
 #  include <mach/mach_time.h>
 #  include <mach/mach.h>
-#  include <IOKit/IOKitLib.h>
 #endif
 
 /* The server URL can be changed when building. */
 #ifndef FB_API_BASE_URL
 #  define FB_API_BASE_URL "http://fossbench.net"
 #endif
-#define FB_VERSION "0.4.0"
+#define FB_VERSION "0.4.2"
 
 /*
  * Native Integer Math and Memory Bandwidth are the only two *measured*
@@ -188,8 +173,6 @@ extern uint64_t fb_c_chase(void **ptrs, uint64_t steps);
 #  define REPEATS	3			/* Number of tries. */
 #endif
 
-#define TELEMETRY_REFRESH_INTERVAL 0.5
-
 /* Simple repeatable random numbers. */
 
 static uint64_t rng_state = 0x853c49e6748fea9bULL;
@@ -236,439 +219,6 @@ struct background_metrics {
 	long available_memory_mb, process_count;
 	int samples, available;
 };
-
-
-#define MAX_TELEMETRY_SAMPLES 1800
-
-struct telemetry_sample {
-	uint64_t elapsed_ms;
-	double temperature_c, clock_mhz;
-};
-
-struct telemetry_monitor {
-	struct telemetry_sample samples[MAX_TELEMETRY_SAMPLES];
-	size_t count;
-	double started;
-	volatile int stop;
-#if defined(_WIN32)
-	HANDLE thread;
-#else
-	pthread_t thread;
-#endif
-};
-
-static int read_number_file(const char *path, double *value)
-{
-	FILE *f = fopen(path, "r");
-	int ok;
-	if (!f) return 0;
-	ok = fscanf(f, "%lf", value) == 1;
-	fclose(f);
-	return ok;
-}
-
-#if defined(__linux__)
-static int read_text_file(const char *path, char *value, size_t cap)
-{
-	FILE *f = fopen(path, "r");
-	if (!f || !fgets(value, (int)cap, f)) { if (f) fclose(f); return 0; }
-	fclose(f);
-	value[strcspn(value, "\r\n")] = '\0';
-	return 1;
-}
-
-static int cpu_sensor_name(const char *name)
-{
-	return strstr(name, "cpu") || strstr(name, "CPU") || strstr(name, "package") ||
-	       strstr(name, "Package") || strstr(name, "coretemp") || strstr(name, "k10temp") ||
-	       strstr(name, "zenpower") || strstr(name, "x86_pkg_temp") || strstr(name, "soc_thermal");
-}
-#endif
-
-#if defined(_WIN32)
-/* Reads MSAcpi_ThermalZoneTemperature from the ACPI thermal zone WMI namespace.
- * Only populated on hardware whose firmware exposes it; many laptops do not. */
-static IWbemServices *wmi_connect_thermal_namespace(void)
-{
-	IWbemLocator *locator = NULL;
-	IWbemServices *services = NULL;
-	BSTR namespace_path = NULL;
-	HRESULT hr;
-
-	hr = CoCreateInstance(&CLSID_WbemLocator, NULL, CLSCTX_INPROC_SERVER, &IID_IWbemLocator, (LPVOID *)&locator);
-	if (FAILED(hr) || !locator) return NULL;
-
-	namespace_path = SysAllocString(L"ROOT\\WMI");
-	if (!namespace_path) { locator->lpVtbl->Release(locator); return NULL; }
-	hr = locator->lpVtbl->ConnectServer(locator, namespace_path, NULL, NULL, NULL, 0, NULL, NULL, &services);
-	SysFreeString(namespace_path);
-	locator->lpVtbl->Release(locator);
-	if (FAILED(hr) || !services) return NULL;
-
-	hr = CoSetProxyBlanket((IUnknown *)services, RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE, NULL,
-			       RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE, NULL, EOAC_NONE);
-	if (FAILED(hr)) { services->lpVtbl->Release(services); return NULL; }
-	return services;
-}
-
-static double wmi_query_temperature(IWbemServices *services)
-{
-	IEnumWbemClassObject *enumerator = NULL;
-	BSTR language = NULL, query = NULL;
-	HRESULT hr;
-	double hottest = -1.0;
-
-	language = SysAllocString(L"WQL");
-	query = SysAllocString(L"SELECT CurrentTemperature FROM MSAcpi_ThermalZoneTemperature");
-	if (!language || !query) goto done;
-
-	hr = services->lpVtbl->ExecQuery(services, language, query,
-		WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY, NULL, &enumerator);
-	if (FAILED(hr) || !enumerator) goto done;
-
-	for (;;) {
-		IWbemClassObject *obj = NULL;
-		ULONG returned = 0;
-		VARIANT value;
-		hr = enumerator->lpVtbl->Next(enumerator, WBEM_INFINITE, 1, &obj, &returned);
-		if (FAILED(hr) || returned == 0) break;
-		VariantInit(&value);
-		/* CurrentTemperature is reported in tenths of a Kelvin. */
-		if (SUCCEEDED(obj->lpVtbl->Get(obj, L"CurrentTemperature", 0, &value, NULL, NULL))) {
-			double tenths_kelvin = 0.0;
-			if (value.vt == VT_I4) tenths_kelvin = (double)value.lVal;
-			else if (value.vt == VT_UI4) tenths_kelvin = (double)value.ulVal;
-			if (tenths_kelvin > 0.0) {
-				double celsius = tenths_kelvin / 10.0 - 273.15;
-				if (celsius > -50.0 && celsius <= 150.0 && celsius > hottest) hottest = celsius;
-			}
-		}
-		VariantClear(&value);
-		obj->lpVtbl->Release(obj);
-	}
-	enumerator->lpVtbl->Release(enumerator);
-done:
-	if (query) SysFreeString(query);
-	if (language) SysFreeString(language);
-	return hottest;
-}
-#endif
-
-#if defined(__APPLE__)
-/* Talks to the AppleSMC user client directly; there is no public framework
- * for this. Struct layout and command bytes come from the SMC protocol that
- * has been stable across Intel and Apple Silicon Macs for over a decade. */
-typedef struct {
-	char major, minor, build, reserved_;
-	uint16_t release;
-} fb_smc_vers_t;
-
-typedef struct {
-	uint16_t version, length;
-	uint32_t cpu_p_limit, gpu_p_limit, mem_p_limit;
-} fb_smc_plimit_t;
-
-typedef struct {
-	uint32_t data_size;
-	uint32_t data_type;
-	char data_attributes;
-} fb_smc_key_info_t;
-
-typedef struct {
-	uint32_t key;
-	fb_smc_vers_t vers;
-	fb_smc_plimit_t plimit;
-	fb_smc_key_info_t key_info;
-	char result, status, data8;
-	uint32_t data32;
-	unsigned char bytes[32];
-} fb_smc_data_t;
-
-#define FB_SMC_KERNEL_INDEX 2
-#define FB_SMC_CMD_READ_BYTES 5
-#define FB_SMC_CMD_READ_KEY_INFO 9
-
-static uint32_t smc_key_from_string(const char *s)
-{
-	return ((uint32_t)(unsigned char)s[0] << 24) | ((uint32_t)(unsigned char)s[1] << 16) |
-	       ((uint32_t)(unsigned char)s[2] << 8) | (uint32_t)(unsigned char)s[3];
-}
-
-static kern_return_t smc_call(io_connect_t conn, fb_smc_data_t *in, fb_smc_data_t *out)
-{
-	size_t out_size = sizeof(*out);
-	return IOConnectCallStructMethod(conn, FB_SMC_KERNEL_INDEX, in, sizeof(*in), out, &out_size);
-}
-
-static int smc_read_temperature(io_connect_t conn, const char *key, double *out)
-{
-	fb_smc_data_t in, info_out, read_out;
-
-	memset(&in, 0, sizeof(in));
-	memset(&info_out, 0, sizeof(info_out));
-	in.key = smc_key_from_string(key);
-	in.data8 = FB_SMC_CMD_READ_KEY_INFO;
-	if (smc_call(conn, &in, &info_out) != KERN_SUCCESS || info_out.key_info.data_size == 0)
-		return 0;
-
-	memset(&in, 0, sizeof(in));
-	memset(&read_out, 0, sizeof(read_out));
-	in.key = smc_key_from_string(key);
-	in.key_info.data_size = info_out.key_info.data_size;
-	in.data8 = FB_SMC_CMD_READ_BYTES;
-	if (smc_call(conn, &in, &read_out) != KERN_SUCCESS)
-		return 0;
-
-	if (info_out.key_info.data_type == smc_key_from_string("sp78") && info_out.key_info.data_size >= 2) {
-		int16_t raw = (int16_t)((read_out.bytes[0] << 8) | read_out.bytes[1]);
-		*out = raw / 256.0;
-		return 1;
-	}
-	if (info_out.key_info.data_type == smc_key_from_string("flt ") && info_out.key_info.data_size >= 4) {
-		float f;
-		memcpy(&f, read_out.bytes, sizeof(f));
-		*out = (double)f;
-		return 1;
-	}
-	return 0;
-}
-
-static io_connect_t smc_open(void)
-{
-	io_service_t service;
-	io_connect_t conn = IO_OBJECT_NULL;
-
-	service = IOServiceGetMatchingService(kIOMasterPortDefault, IOServiceMatching("AppleSMC"));
-	if (service == IO_OBJECT_NULL) return IO_OBJECT_NULL;
-	if (IOServiceOpen(service, mach_task_self(), 0, &conn) != KERN_SUCCESS) conn = IO_OBJECT_NULL;
-	IOObjectRelease(service);
-	return conn;
-}
-
-/* CPU-related SMC keys across Intel Macs and Apple Silicon M1-M5, gathered
- * from publicly reverse-engineered sensor tables (e.g. exelban/stats,
- * acidanthera/VirtualSMC). Coverage varies by exact model/chip revision. */
-static const char *const smc_cpu_temp_keys[] = {
-	"TC0D", "TC0E", "TC0F", "TC0P",
-	"Tp00", "Tp01", "Tp04", "Tp05", "Tp08", "Tp09", "Tp0C", "Tp0D", "Tp0f", "Tp0G",
-	"Tp0H", "Tp0j", "Tp0K", "Tp0L", "Tp0m", "Tp0n", "Tp0O", "Tp0P", "Tp0p", "Tp0r",
-	"Tp0R", "Tp0T", "Tp0u", "Tp0U", "Tp0X", "Tp0a", "Tp0b", "Tp0d", "Tp0g", "Tp0y",
-	"Tp1h", "Tp1l", "Tp1p", "Tp1t",
-	"Tc0a", "Tc0b", "Tc0x", "Tc0z",
-};
-#endif
-
-static double sample_cpu_temperature(void)
-{
-#if defined(__linux__)
-	DIR *dir = opendir("/sys/class/thermal");
-	struct dirent *entry;
-	double hottest = -1.0;
-	if (!dir) return -1.0;
-	while ((entry = readdir(dir)) != NULL) {
-		char path[512], type[128];
-		double value;
-		if (strncmp(entry->d_name, "thermal_zone", 12) != 0) continue;
-		snprintf(path, sizeof(path), "/sys/class/thermal/%s/type", entry->d_name);
-		if (!read_text_file(path, type, sizeof(type)) || !cpu_sensor_name(type)) continue;
-		snprintf(path, sizeof(path), "/sys/class/thermal/%s/temp", entry->d_name);
-		if (read_number_file(path, &value)) {
-			if (value > 1000.0) value /= 1000.0;
-			if (value >= 0.0 && value <= 150.0 && value > hottest) hottest = value;
-		}
-	}
-	closedir(dir);
-	if (hottest < 0.0) {
-		dir = opendir("/sys/class/hwmon");
-		if (!dir) return -1.0;
-		while ((entry = readdir(dir)) != NULL) {
-			char base[512], path[512], name[128];
-			DIR *sensor_dir;
-			struct dirent *sensor;
-			if (strncmp(entry->d_name, "hwmon", 5) != 0) continue;
-			snprintf(base, sizeof(base), "/sys/class/hwmon/%s", entry->d_name);
-			snprintf(path, sizeof(path), "%s/name", base);
-			if (!read_text_file(path, name, sizeof(name)) || !cpu_sensor_name(name)) continue;
-			sensor_dir = opendir(base);
-			if (!sensor_dir) continue;
-			while ((sensor = readdir(sensor_dir)) != NULL) {
-				size_t length = strlen(sensor->d_name);
-				double value;
-				if (strncmp(sensor->d_name, "temp", 4) != 0 || length < 7 || strcmp(sensor->d_name + length - 6, "_input") != 0) continue;
-				snprintf(path, sizeof(path), "%s/%s", base, sensor->d_name);
-				if (read_number_file(path, &value)) {
-					if (value > 1000.0) value /= 1000.0;
-					if (value >= 0.0 && value <= 150.0 && value > hottest) hottest = value;
-				}
-			}
-			closedir(sensor_dir);
-		}
-		closedir(dir);
-	}
-	return hottest;
-#elif defined(_WIN32)
-	{
-		static int initialized = 0;
-		static IWbemServices *services = NULL;
-		if (!initialized) {
-			initialized = 1;
-			services = wmi_connect_thermal_namespace();
-		}
-		return services ? wmi_query_temperature(services) : -1.0;
-	}
-#elif defined(__APPLE__)
-	{
-		static int initialized = 0;
-		static io_connect_t conn = IO_OBJECT_NULL;
-		double hottest = -1.0;
-		size_t i;
-
-		if (!initialized) {
-			initialized = 1;
-			conn = smc_open();
-		}
-		if (conn == IO_OBJECT_NULL) return -1.0;
-
-		for (i = 0; i < sizeof(smc_cpu_temp_keys) / sizeof(smc_cpu_temp_keys[0]); i++) {
-			double value;
-			if (smc_read_temperature(conn, smc_cpu_temp_keys[i], &value) &&
-			    value > 0.0 && value <= 150.0 && value > hottest)
-				hottest = value;
-		}
-		return hottest;
-	}
-#else
-	return -1.0;
-#endif
-}
-
-static double sample_cpu_clock_mhz(void)
-{
-#if defined(__linux__)
-	DIR *dir = opendir("/sys/devices/system/cpu");
-	struct dirent *entry;
-	double total = 0.0;
-	long count = 0;
-	if (dir) {
-		while ((entry = readdir(dir)) != NULL) {
-			char path[512], *end;
-			double value;
-			if (strncmp(entry->d_name, "cpu", 3) != 0 || !isdigit((unsigned char)entry->d_name[3])) continue;
-			strtol(entry->d_name + 3, &end, 10);
-			if (*end) continue;
-			snprintf(path, sizeof(path), "/sys/devices/system/cpu/%s/cpufreq/scaling_cur_freq", entry->d_name);
-			if (read_number_file(path, &value) && value > 0.0) { total += value / 1000.0; count++; }
-		}
-		closedir(dir);
-	}
-	if (count) return total / (double)count;
-	{
-		FILE *f = fopen("/proc/cpuinfo", "r");
-		char line[256];
-		if (!f) return -1.0;
-		while (fgets(line, sizeof(line), f)) {
-			double value;
-			if (sscanf(line, "cpu MHz%*[^:]: %lf", &value) == 1 && value > 0.0) { total += value; count++; }
-		}
-		fclose(f);
-	}
-	return count ? total / (double)count : -1.0;
-#elif defined(__APPLE__)
-	/* No public API reports live per-core frequency on macOS (none exists at
-	 * all on Apple Silicon); sysctl hw.cpufrequency is a fixed nominal value,
-	 * not a real-time reading, so report unavailable rather than a constant. */
-	return -1.0;
-#elif defined(_WIN32)
-	{
-		PROCESSOR_POWER_INFORMATION info[64];
-		SYSTEM_INFO sysinfo;
-		DWORD count, i;
-		double total = 0.0;
-
-		GetSystemInfo(&sysinfo);
-		count = sysinfo.dwNumberOfProcessors;
-		if (count == 0) count = 1;
-		if (count > 64) count = 64;
-		if (CallNtPowerInformation(ProcessorInformation, NULL, 0, info,
-					   count * sizeof(PROCESSOR_POWER_INFORMATION)) != 0)
-			return -1.0;
-		for (i = 0; i < count; i++) total += info[i].CurrentMhz;
-		return count ? total / (double)count : -1.0;
-	}
-#else
-	return -1.0;
-#endif
-}
-
-static void record_telemetry_sample(struct telemetry_monitor *monitor)
-{
-	struct telemetry_sample *sample;
-	if (monitor->count >= MAX_TELEMETRY_SAMPLES) return;
-	sample = &monitor->samples[monitor->count++];
-	sample->elapsed_ms = (uint64_t)((now_seconds() - monitor->started) * 1000.0);
-	sample->temperature_c = sample_cpu_temperature();
-	sample->clock_mhz = sample_cpu_clock_mhz();
-}
-
-static void telemetry_sleep(void)
-{
-#if defined(_WIN32)
-	Sleep(25);
-#else
-	usleep(25000);
-#endif
-}
-
-#if defined(_WIN32)
-static DWORD WINAPI telemetry_entry(LPVOID arg)
-#else
-static void *telemetry_entry(void *arg)
-#endif
-{
-	struct telemetry_monitor *monitor = (struct telemetry_monitor *)arg;
-	double next = monitor->started;
-#if defined(_WIN32)
-	/* sample_cpu_temperature() lazily opens a WMI connection on first use,
-	 * which requires this thread's COM apartment to be initialized first. */
-	CoInitializeEx(NULL, COINIT_MULTITHREADED);
-#endif
-	while (!monitor->stop) {
-		double current = now_seconds();
-		if (current >= next) { record_telemetry_sample(monitor); next += TELEMETRY_REFRESH_INTERVAL; }
-		telemetry_sleep();
-	}
-	record_telemetry_sample(monitor);
-#if defined(_WIN32)
-	CoUninitialize();
-	return 0;
-#else
-	return NULL;
-#endif
-}
-
-static int start_telemetry_monitor(struct telemetry_monitor *monitor, double started)
-{
-	memset(monitor, 0, sizeof(*monitor));
-	monitor->started = started;
-#if defined(_WIN32)
-	monitor->thread = CreateThread(NULL, 0, telemetry_entry, monitor, 0, NULL);
-	return monitor->thread != NULL;
-#else
-	return pthread_create(&monitor->thread, NULL, telemetry_entry, monitor) == 0;
-#endif
-}
-
-static void stop_telemetry_monitor(struct telemetry_monitor *monitor, int started)
-{
-	if (!started) return;
-	monitor->stop = 1;
-#if defined(_WIN32)
-	WaitForSingleObject(monitor->thread, INFINITE);
-	CloseHandle(monitor->thread);
-#else
-	pthread_join(monitor->thread, NULL);
-#endif
-}
 
 struct cpu_snapshot { uint64_t total, idle; };
 
@@ -1239,9 +789,7 @@ int fossbench_run(int verbose, int upload_mode, int system_check)
 	struct result real_multi[NTESTS], real_single[NTESTS];
 	struct system_info system_info;
 	struct background_metrics background;
-	struct telemetry_monitor telemetry;
 	double benchmark_started;
-	int telemetry_started;
 	uint64_t duration_ms;
 	size_t i;
 
@@ -1262,7 +810,6 @@ int fossbench_run(int verbose, int upload_mode, int system_check)
 		}
 	}
 	benchmark_started = now_seconds();
-	telemetry_started = start_telemetry_monitor(&telemetry, benchmark_started);
 
 	printf("\n  preparing workloads...");
 	fflush(stdout);
@@ -1313,7 +860,6 @@ int fossbench_run(int verbose, int upload_mode, int system_check)
 	}
 
 	printf("  --------------------------------------------------------------------------\n");
-	stop_telemetry_monitor(&telemetry, telemetry_started);
 
 	duration_ms = (uint64_t)((now_seconds() - benchmark_started) * 1000.0);
 	printf("  %-24s %41.2fs\n", "TOTAL DURATION", (double)duration_ms / 1000.0);
@@ -1344,8 +890,7 @@ int fossbench_run(int verbose, int upload_mode, int system_check)
 			fprintf(stderr, "  Upload support is disabled in this build.\n");
 #else
 			upload_results(&system_info, raw_multi, raw_single,
-				       real_multi, real_single, duration_ms, &background,
-				       &telemetry);
+				       real_multi, real_single, duration_ms, &background);
 #endif
 		}
 	}
