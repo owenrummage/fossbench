@@ -382,9 +382,9 @@ static void record_telemetry_sample(struct telemetry_monitor *monitor)
 static void telemetry_sleep(void)
 {
 #if defined(_WIN32)
-	Sleep(100);
+	Sleep(25);
 #else
-	usleep(100000);
+	usleep(25000);
 #endif
 }
 
@@ -398,7 +398,7 @@ static void *telemetry_entry(void *arg)
 	double next = monitor->started;
 	while (!monitor->stop) {
 		double current = now_seconds();
-		if (current >= next) { record_telemetry_sample(monitor); next += 1.0; }
+		if (current >= next) { record_telemetry_sample(monitor); next += 0.25; }
 		telemetry_sleep();
 	}
 	record_telemetry_sample(monitor);
