@@ -294,18 +294,31 @@ static int read_first_property(const char *path, char *dst, size_t cap)
  * by GetLogicalProcessorInformationEx describes exactly one physical core. */
 static long win_physical_cores(void)
 {
+	typedef BOOL (WINAPI *get_logical_processor_information_ex_fn)(
+		LOGICAL_PROCESSOR_RELATIONSHIP,
+		PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, PDWORD);
+	get_logical_processor_information_ex_fn get_topology;
+	HMODULE kernel32;
 	DWORD length = 0;
 	BYTE *buffer, *p;
 	long cores = 0;
 
-	if (GetLogicalProcessorInformationEx(RelationProcessorCore, NULL, &length))
+	/* This API is unavailable on Windows XP. Resolve it dynamically so the
+	 * i386 compatibility build does not acquire a newer kernel32 import. */
+	kernel32 = GetModuleHandleA("kernel32.dll");
+	get_topology = kernel32 == NULL ? NULL :
+		(get_logical_processor_information_ex_fn)(uintptr_t)
+		GetProcAddress(kernel32, "GetLogicalProcessorInformationEx");
+	if (get_topology == NULL)
+		return 0;
+	if (get_topology(RelationProcessorCore, NULL, &length))
 		return 0;
 	if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || length == 0)
 		return 0;
 	buffer = malloc(length);
 	if (buffer == NULL)
 		return 0;
-	if (GetLogicalProcessorInformationEx(RelationProcessorCore,
+	if (get_topology(RelationProcessorCore,
 			(PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)buffer, &length)) {
 		for (p = buffer; p < buffer + length; ) {
 			PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX record =
