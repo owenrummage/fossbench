@@ -246,6 +246,21 @@ static int upload_results(const struct system_info *info,
 				used += (size_t)n;
 			}
 		}
+		n = snprintf(payload + used, sizeof payload - used, "],\"telemetry_phases\":[");
+		if (n < 0 || (size_t)n >= sizeof payload - used) return 0;
+		used += (size_t)n;
+		{
+			size_t i;
+			for (i = 0; i < telemetry->phase_count; i++) {
+				const struct telemetry_phase *phase = &telemetry->phases[i];
+				n = snprintf(payload + used, sizeof payload - used,
+					"%s{\"elapsed_ms\":%llu,\"suite\":\"%s\",\"workload_index\":%d,\"mode\":\"%s\"}",
+					i ? "," : "", (unsigned long long)phase->elapsed_ms,
+					phase->suite, phase->workload_index, phase->mode);
+				if (n < 0 || (size_t)n >= sizeof payload - used) return 0;
+				used += (size_t)n;
+			}
+		}
 		if (used + 4 >= sizeof payload) return 0;
 		memcpy(payload + used, "]}}", 4);
 		payload_len = (int)(used + 3);
