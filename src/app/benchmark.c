@@ -173,6 +173,8 @@ extern uint64_t fb_c_chase(void **ptrs, uint64_t steps);
 #  define REPEATS	3			/* Number of tries. */
 #endif
 
+#define TELEMETRY_REFRESH_INTERVAL 0.5
+
 /* Simple repeatable random numbers. */
 
 static uint64_t rng_state = 0x853c49e6748fea9bULL;
@@ -220,25 +222,17 @@ struct background_metrics {
 	int samples, available;
 };
 
+
 #define MAX_TELEMETRY_SAMPLES 1800
-#define MAX_TELEMETRY_PHASES 44
 
 struct telemetry_sample {
 	uint64_t elapsed_ms;
 	double temperature_c, clock_mhz;
 };
 
-struct telemetry_phase {
-	uint64_t elapsed_ms;
-	const char *suite, *mode;
-	int workload_index;
-};
-
 struct telemetry_monitor {
 	struct telemetry_sample samples[MAX_TELEMETRY_SAMPLES];
 	size_t count;
-	struct telemetry_phase phases[MAX_TELEMETRY_PHASES];
-	size_t phase_count;
 	double started;
 	volatile int stop;
 #if defined(_WIN32)
@@ -247,19 +241,6 @@ struct telemetry_monitor {
 	pthread_t thread;
 #endif
 };
-
-static void record_telemetry_phase(struct telemetry_monitor *monitor,
-				   const char *suite, int workload_index,
-				   const char *mode)
-{
-	struct telemetry_phase *phase;
-	if (monitor->phase_count >= MAX_TELEMETRY_PHASES) return;
-	phase = &monitor->phases[monitor->phase_count++];
-	phase->elapsed_ms = (uint64_t)((now_seconds() - monitor->started) * 1000.0);
-	phase->suite = suite;
-	phase->workload_index = workload_index;
-	phase->mode = mode;
-}
 
 static int read_number_file(const char *path, double *value)
 {
@@ -420,7 +401,7 @@ static void *telemetry_entry(void *arg)
 	double next = monitor->started;
 	while (!monitor->stop) {
 		double current = now_seconds();
-		if (current >= next) { record_telemetry_sample(monitor); next += 0.25; }
+		if (current >= next) { record_telemetry_sample(monitor); next += TELEMETRY_REFRESH_INTERVAL; }
 		telemetry_sleep();
 	}
 	record_telemetry_sample(monitor);
@@ -1063,9 +1044,7 @@ int fossbench_run(int verbose, int upload_mode, int system_check)
 		fflush(stdout);
 
 		/* Run every test with all cores and one core. */
-		record_telemetry_phase(&telemetry, "asm", (int)i, "multicore");
 		raw_multi[i]  = run_test(&tests[i], (int)g_ncores);
-		record_telemetry_phase(&telemetry, "asm", (int)i, "singlecore");
 		raw_single[i] = run_test(&tests[i], 1);
 
 		printf(" %12.1f  %-11s %7.2fs\n",
@@ -1086,9 +1065,7 @@ int fossbench_run(int verbose, int upload_mode, int system_check)
 	for (i = 0; i < NTESTS; i++) {
 		printf("  %-24s", tests[i].name);
 		fflush(stdout);
-		record_telemetry_phase(&telemetry, "c", (int)i, "multicore");
 		real_multi[i] = run_test(&tests[i], (int)g_ncores);
-		record_telemetry_phase(&telemetry, "c", (int)i, "singlecore");
 		real_single[i] = run_test(&tests[i], 1);
 		printf(" %12.1f  %-11s %7.2fs\n",
 		       display_metric(&tests[i], &real_multi[i]), tests[i].unit,
