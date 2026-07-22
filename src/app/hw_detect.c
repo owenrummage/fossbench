@@ -26,16 +26,6 @@
 #  endif
 #endif
 
-#if defined(_WIN32)
-#  define HW_OS "Windows"
-#elif defined(__APPLE__)
-#  define HW_OS "macOS"
-#elif defined(__linux__)
-#  define HW_OS "Linux"
-#else
-#  define HW_OS "POSIX"
-#endif
-
 #if defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64)
 #  define HW_ARCH "ARM64"
 #elif defined(__x86_64__) || defined(_M_X64)
@@ -53,6 +43,29 @@
 const char *hw_arch_name(void)
 {
 	return HW_ARCH;
+}
+
+const char *hw_os_name(void)
+{
+#if defined(_WIN32)
+	return "Windows";
+#elif defined(__APPLE__)
+	return "macOS";
+#elif defined(__linux__)
+	return "Linux";
+#else
+	/* Fall back to utsname.sysname.
+	 * Beacause POSIX doesn't specify the length of the utsname members,
+	 * store utsname in a static buffer and return a pointer to .sysname. */
+	static struct utsname u;
+	if (uname(&u) == 0) {
+		return (const char*)u.sysname;
+	}
+	else {
+		/* give up */
+		return "Unknown";
+	}
+#endif
 }
 
 static void trim(char *s)
@@ -402,7 +415,7 @@ void hw_detect_system(struct system_info *info)
 	info->cpu_threads = detected_threads;
 	info->cpu_cores = detected_threads;
 	strncpy(info->cpu, HW_ARCH, sizeof(info->cpu) - 1);
-	strncpy(info->operating_system, HW_OS, sizeof(info->operating_system) - 1);
+	strncpy(info->operating_system, hw_os_name(), sizeof(info->operating_system) - 1);
 #if defined(__clang__)
 	snprintf(info->compiler, sizeof(info->compiler), "Clang %s", __clang_version__);
 #elif defined(__GNUC__)
